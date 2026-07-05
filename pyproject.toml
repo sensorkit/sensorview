@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sensorview"
+version = "0.0.1"
+description = "UI and tools for SensorKit"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+    { name = "Zach Gazak", email = "jzgazak@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://github.com/sensorkit/sensorview"
+
+[dependency-groups]
+dev = [
+    "build>=1.4.3",
+    "twine>=6.2.0",
+]

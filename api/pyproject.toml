@@ -1,0 +1,16 @@
+[project]
+name = "sensorview-api"
+version = "0.1.0"
+description = "Supplemental API for SensorView — TLE caching, image thumbnails"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "httpx>=0.28",
+    "aiosqlite>=0.20",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pyinstaller>=6.10",
+]

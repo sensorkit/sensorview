@@ -1,0 +1,72 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/*
+# but keep installer icons for electron-builder
+!build/icon.png
+!build/icon.ico
+!build/icon.icns
+
+# Environment
+.env
+.env.local
+.env.*.local
+.venv
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+
+# API database
+api/*.db
+
+# Logs
+*.log
+
+# TypeScript
+*.tsbuildinfo
+
+# Vite
+vite.config.ts.timestamp-*
+
+# JS9 bundle copied from node_modules by scripts/copy-js9.mjs on install
+public/js9/
+
+# Electron build output
+release/
+
+# Sidecar build artifacts (the shipped binaries live in resources/ and are
+# rebuilt per platform via scripts/build-sidecar.sh, so they're produced in
+# CI, not checked in here). The mediamtx.yml baseline config IS tracked.
+resources/sensorview-api-*
+resources/mediamtx-*
+api/dist/
+api/build/
+api/*.spec
+
+# JPL SPICE ephemeris kernels — large binaries fetched/generated locally
+# (e.g. de421.bsp for Horizons), not checked into git.
+*.bsp
+
+# Claude Code local config — settings.local.json is per-user and launch.json
+# is local tooling; nothing here is shared, so keep the whole dir out of git.
+.claude/
+

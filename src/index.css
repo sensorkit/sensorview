@@ -1,0 +1,177 @@
+@import "tailwindcss";
+
+/* Self-hosted fonts (latin subset). Downloaded from Google Fonts into
+ * public/fonts so the packaged app renders correctly with no network. */
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/Fraunces-400.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/Fraunces-500.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/Fraunces-600.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/Inter-400.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/Inter-500.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/Inter-600.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-400.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-500.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/JetBrainsMono-600.woff2) format('woff2');
+}
+
+@theme {
+  /* Legacy tokens (used by Devices / Tasks / Images / Status / Settings) */
+  --color-sky-dark: #0a0e1a;
+  --color-sky-black: #000000;
+  --color-star-warm: #ffcc66;
+  --color-constellation: #334466;
+  --color-panel-bg: #0d1117;
+  --color-panel-border: #1e2a3a;
+  --color-text-dim: #6b7b8d;
+  --color-text-bright: #e6edf3;
+
+  /* V4 "Atlas Observatory" palette */
+  --color-sky-ink: #06101c;
+  --color-rail-ink: #0a1220;
+  --color-topbar-ink: #040812;
+  --color-paper: #f4ead4;
+  --color-paper-dark: #e8dcbe;
+  --color-paper-dim: #8a7856;
+  --color-paper-muted: #c7b88f;
+  --color-ink: #1a2332;
+  --color-brass: #b88a3f;
+  --color-brass-dim: #8a6728;
+  --color-terracotta: #c75f3c;
+  --color-sage: #6b8e6b;
+
+  /* Almanac */
+  --color-moon: #e4dcc4;
+  --color-sun: #e6a24a;
+  --color-civil: #5b6f8a;
+  --color-nautical: #3f516b;
+  --color-night: #2a3447;
+
+  /* Orbit regimes */
+  --color-leo: #44aa66;
+  --color-meo: #5577cc;
+  --color-geo: #cc7744;
+  --color-heo: #aa44aa;
+
+  /* Font families */
+  --font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-serif: "Fraunces", Georgia, serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  font-family: var(--font-sans);
+  color: var(--color-text-bright);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+canvas {
+  image-rendering: auto;
+}
+
+/* V4 typography helpers — match the classes used in the handoff mockup */
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1, "cv11" 1;
+}
+
+.serif {
+  font-family: var(--font-serif);
+  font-optical-sizing: auto;
+}
+
+/* --- JS9 dark theme ---
+ * js9-allinone.css ships a light theme (canvas + menubar are near-white). It's
+ * injected at runtime after this file, so we override with !important (JS9 uses
+ * none on these rules). */
+.JS9Image {
+  /* image backing matches the side panels (sky-ink), not black */
+  background-color: var(--color-sky-ink) !important;
+}
+.JS9Menubar,
+.JS9MenubarContainer,
+.JS9Toolbar {
+  /* bar matches the side panels; `background` shorthand also resets JS9's gradient image */
+  background: var(--color-sky-ink) !important;
+  border-color: var(--color-panel-border) !important;
+}
+.JS9Button {
+  /* lighter navy than the sky-ink bar so the buttons read as raised */
+  background: var(--color-ink) !important;
+  color: var(--color-text-dim) !important;
+  border-color: var(--color-panel-border) !important;
+}
+.JS9Button:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+  color: var(--color-text-bright) !important;
+}
+.JS9Tooltip {
+  background-color: var(--color-panel-bg) !important;
+  color: var(--color-text-bright) !important;
+  border-color: var(--color-panel-border) !important;
+}
+/* Hide JS9's built-in value/position overlay — SensorView renders its own
+ * readout below the frame. Kept off-screen (not display:none) so JS9 keeps
+ * updating it for our observer. */
+.JS9Message:not(.JS9Progress) {
+  position: absolute !important;
+  left: -9999px !important;
+  top: auto !important;
+}

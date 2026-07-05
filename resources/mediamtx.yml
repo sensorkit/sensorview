@@ -1,0 +1,46 @@
+# SensorView MediaMTX baseline config.
+#
+# This file is shipped as-is and read by MediaMTX at startup. SensorView
+# manages per-stream paths at runtime via MediaMTX's HTTP control API
+# (apiAddress below) — paths added/removed in the Streams tab do not modify
+# this file. Edit only to override server-level defaults.
+
+logLevel: info
+logDestinations: [stdout]
+
+# Disable inbound-server protocols we don't need (we are *clients* of
+# upstream RTSP, never a server). HLS + WebRTC are the only player-facing
+# protocols we expose to the SensorView renderer.
+rtsp: false
+rtmp: false
+srt: false
+
+# WebRTC (WHEP) server for the per-tile low-latency mode. Loopback only;
+# WHEP signaling on /<path>/whep, ICE candidates exchanged in-band.
+webrtc: true
+webrtcAddress: 127.0.0.1:8889
+webrtcAllowOrigins: ['*']
+
+# HLS server — what the SensorView renderer plays.
+hls: true
+hlsAddress: 127.0.0.1:8888
+hlsAlwaysRemux: false
+# Force the classic MPEG-TS HLS variant. MediaMTX's default `lowLatency`
+# (LL-HLS over fMP4) emits variable-duration parts under jitter, which
+# breaks hls.js even with lowLatencyMode disabled. mpegts is the most
+# broadly-compatible variant and what hls.js's built-in demuxer handles best.
+hlsVariant: mpegts
+# 3 × 1s segments → manifest ready in ~3 s, vs ~7 s at the default count of
+# 7. Lower count = lower start-up + steady-state latency, with less jitter
+# slack — fine on a LAN, would be tighter than I'd want over public internet.
+hlsSegmentCount: 3
+hlsSegmentDuration: 1s
+hlsAllowOrigins: ['*']
+
+# Control API — what the SensorView sidecar talks to when adding/removing
+# streams. Bound to loopback only; no auth (localhost-only access model).
+api: true
+apiAddress: 127.0.0.1:9997
+
+# Paths are added at runtime via the API. Leave empty.
+paths: {}

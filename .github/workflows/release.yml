@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            sidecar_target: x86_64-unknown-linux-gnu
+            electron_args: "--linux"
+          - platform: windows-latest
+            sidecar_target: x86_64-pc-windows-msvc
+            electron_args: "--win"
+          - platform: macos-latest
+            sidecar_target: aarch64-apple-darwin
+            electron_args: "--mac"
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Linux system deps for electron-builder
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnotify-bin \
+            rpm
+
+      - name: Install frontend deps
+        # Known npm/rollup bug: `npm install` on a lockfile generated for
+        # a different platform skips the platform-specific optional deps
+        # (e.g. @rollup/rollup-darwin-arm64). Dropping the lockfile forces
+        # a clean resolution on each runner.
+        # Also: `npm ci` would be strict about the js9→engine.io→cookie
+        # semver mismatch and fail, so we use plain `install`.
+        shell: bash
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund
+
+      - name: Install sidecar deps
+        working-directory: api
+        run: uv sync --dev
+
+      - name: Build sidecar
+        shell: bash
+        env:
+          TARGET: ${{ matrix.sidecar_target }}
+        run: bash scripts/build-sidecar.sh
+
+      - name: Build Electron app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run electron:build -- ${{ matrix.electron_args }} --publish never
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sensorview-${{ matrix.sidecar_target }}
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "SensorView ${{ github.ref_name }}"
+          body: |
+            Unsigned pre-release build. See INSTALL.md for platform-specific install steps.
+
+            **Windows**: SmartScreen will warn on first launch — click "More info" → "Run anyway".
+            **macOS**: unsigned — first launch requires right-click → Open (Gatekeeper bypass).
+          draft: true
+          prerelease: true
+          files: artifacts/**/*
