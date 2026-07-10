@@ -18,6 +18,14 @@ declare global {
     platform: NodeJS.Platform;
     getSidecarPort: () => Promise<number | null>;
     openSkyviewPopout: () => Promise<void>;
+    /** Pop a main tab out into its own BrowserWindow (focuses it if already open). */
+    openTabWindow: (tabId: string) => Promise<void>;
+    /** List tab ids that currently have an open detached window. */
+    listDetachedTabs: () => Promise<string[]>;
+    /** Subscribe to detached-tab window close events. Returns an unsubscribe fn. */
+    onTabWindowClosed: (cb: (tabId: string) => void) => () => void;
+    /** Close a detached tab window (re-dock it). */
+    closeTabWindow: (tabId: string) => Promise<void>;
     openExternal: (url: string) => void;
     onSidecarReady: (cb: (payload: { port: number }) => void) => () => void;
     onCaptureGoto: (

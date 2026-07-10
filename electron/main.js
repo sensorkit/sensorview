@@ -51,6 +51,25 @@ let mainWindow = null;
 /** @type {BrowserWindow | null} */
 let popoutWindow = null;
 
+/** Detached main-tab windows, keyed by tab id. See openTabWindow(). */
+/** @type {Map<string, BrowserWindow>} */
+const tabWindows = new Map();
+
+/**
+ * Tab id → display label, used only for the detached window's initial title.
+ * Mirrors TAB_DEFS in src/stores/tabs.ts (main.js can't import the TS module);
+ * the keys are the guard for which tab ids may be opened as a window.
+ */
+const TAB_LABELS = {
+  skyview: "SkyView",
+  devices: "Devices",
+  tasks: "Tasks",
+  images: "Images",
+  status: "Status",
+  streams: "Streams",
+  settings: "Settings",
+};
+
 // ---------- Resource path helpers ----------
 
 function getHostTriple() {
@@ -280,6 +299,74 @@ function openSkyviewPopout() {
 
   popoutWindow.on("closed", () => {
     popoutWindow = null;
+  });
+}
+
+/**
+ * Pop a main tab out into its own window. Each tab gets a standalone window that
+ * loads `#/window/<tabId>` (rendered by DetachedTabWindow, outside the app
+ * chrome) and opens its own SSE stream. Reopening an already-detached tab just
+ * focuses its window. When the window closes we notify the main window so it can
+ * re-dock the tab. Per-tab bounds persist under tab-window-<id>-state.json.
+ */
+function openTabWindow(tabId) {
+  if (!Object.prototype.hasOwnProperty.call(TAB_LABELS, tabId)) return;
+
+  const existing = tabWindows.get(tabId);
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.focus();
+    return;
+  }
+
+  const state = windowStateKeeper({
+    defaultWidth: 1200,
+    defaultHeight: 820,
+    file: `tab-window-${tabId}-state.json`,
+  });
+
+  const win = new BrowserWindow({
+    x: state.x,
+    y: state.y,
+    width: state.width,
+    height: state.height,
+    minWidth: 640,
+    minHeight: 480,
+    backgroundColor: "#06101c",
+    title: `SensorView — ${TAB_LABELS[tabId]}`,
+    icon: APP_ICON,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: PRELOAD,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      backgroundThrottling: false,
+    },
+  });
+
+  state.manage(win);
+  tabWindows.set(tabId, win);
+
+  if (IS_DEV) {
+    win.loadURL(`${DEV_SERVER_URL}/#/window/${tabId}`);
+  } else {
+    win.loadFile(join(__dirname, "..", "dist", "index.html"), {
+      hash: `/window/${tabId}`,
+    });
+  }
+
+  win.once("ready-to-show", () => {
+    if (sidecarPort && !win.isDestroyed()) {
+      win.webContents.send("sidecar-ready", { port: sidecarPort });
+    }
+  });
+
+  win.on("closed", () => {
+    tabWindows.delete(tabId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("tab:closed", tabId);
+    }
   });
 }
 
@@ -639,6 +726,19 @@ function stopDockerTail(container) {
 
 ipcMain.handle("sidecar:port", () => sidecarPort);
 ipcMain.handle("popout:open", () => openSkyviewPopout());
+ipcMain.handle("tab:open", (_e, tabId) => openTabWindow(tabId));
+ipcMain.handle("tab:list", () =>
+  [...tabWindows.entries()]
+    .filter(([, win]) => win && !win.isDestroyed())
+    .map(([id]) => id),
+);
+// Close a detached tab window (re-dock). The window's own "closed" handler then
+// notifies the main window to clear the detached marker.
+ipcMain.handle("tab:close", (_e, tabId) => {
+  const win = tabWindows.get(tabId);
+  if (win && !win.isDestroyed()) win.close();
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus();
+});
 ipcMain.on("shell:open-external", (_e, url) => {
   if (typeof url === "string" && /^https?:\/\//.test(url)) shell.openExternal(url);
 });

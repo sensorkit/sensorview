@@ -73,3 +73,39 @@ export async function openSkyviewPopout(): Promise<void> {
   // Browser fallback: plain window.open with the hash route.
   window.open("#/popout/skyview", "_blank", "width=1280,height=800");
 }
+
+/**
+ * Pop a main tab out into its own window. In Electron this creates a real,
+ * movable/resizable BrowserWindow and returns `true` (the caller should mark
+ * the tab detached). In a plain browser there's no true detach, so we fall back
+ * to a `window.open` and return `false` — the tab stays a normal in-app tab.
+ */
+export async function openTabWindow(tabId: string): Promise<boolean> {
+  if (api?.openTabWindow) {
+    await api.openTabWindow(tabId);
+    return true;
+  }
+  window.open(`#/window/${tabId}`, "_blank", "width=1200,height=820");
+  return false;
+}
+
+/**
+ * Subscribe to detached-tab-window close events (Electron). The callback fires
+ * with the tab id when its window is closed, so the main window can re-dock it.
+ * No-op in the browser.
+ */
+export function onTabWindowClosed(cb: (tabId: string) => void): () => void {
+  if (!api?.onTabWindowClosed) return () => {};
+  return api.onTabWindowClosed(cb);
+}
+
+/** Ask the main process which tabs currently have an open window. Browser → []. */
+export async function listDetachedTabs(): Promise<string[]> {
+  if (!api?.listDetachedTabs) return [];
+  return api.listDetachedTabs();
+}
+
+/** Close a detached tab window (re-dock it). No-op in the browser. */
+export async function closeTabWindow(tabId: string): Promise<void> {
+  if (api?.closeTabWindow) await api.closeTabWindow(tabId);
+}

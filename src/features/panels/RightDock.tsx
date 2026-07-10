@@ -127,7 +127,7 @@ function ArrowTab({
       style={{ right, top }}
       title={open ? `Hide ${label}` : `Show ${label}`}
       aria-label={open ? `Hide ${label}` : `Show ${label}`}
-      className="fixed z-40 -translate-y-1/2 flex items-center justify-center w-5 h-14 rounded-l-lg bg-panel-bg/95 backdrop-blur-md border border-r-0 border-panel-border text-text-dim hover:text-text-bright hover:bg-panel-bg cursor-pointer select-none text-xs shadow-[-3px_0_10px_rgba(0,0,0,0.4)] transition-[right] duration-200 ease-out"
+      className="fixed z-40 -translate-y-1/2 flex items-center justify-center w-5 h-14 rounded-l-lg bg-panel-bg/40 border border-r-0 border-panel-border text-text-dim hover:text-text-bright hover:bg-panel-bg/80 cursor-pointer select-none text-xs shadow-[-3px_0_10px_rgba(0,0,0,0.4)] transition-[right,background-color] duration-200 ease-out"
     >
       {open ? "→" : "←"}
     </button>

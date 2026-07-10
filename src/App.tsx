@@ -9,6 +9,7 @@ import { StatusPage } from "./features/status/StatusPage";
 import { StreamsPage } from "./features/streams/StreamsPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
 import { SkyviewPopout } from "./features/skyview/SkyviewPopout";
+import { DetachedTabWindow } from "./layout/DetachedTabWindow";
 import { openSkyviewPopout } from "./lib/electron-bridge";
 import { useSensorKit } from "./lib/sensorkit-client/useSensorKit";
 
@@ -38,6 +39,7 @@ export default function App() {
       <RecorderBridge />
       <Routes>
         <Route path="/popout/skyview" element={<SkyviewPopout />} />
+        <Route path="/window/:tabId" element={<DetachedTabWindow />} />
         <Route element={<AppLayout />}>
           <Route index element={<AtlasContainer />} />
           <Route path="devices" element={<DevicesPage />} />

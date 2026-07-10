@@ -1,28 +1,37 @@
-import { useEffect, useRef, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useSensorKitStore } from "../stores/sensorkit";
 import { useObserver, lstDegrees } from "../features/skyview/hooks/useObserver";
 import { setAgentEnabled } from "../lib/sensorkit-client/commands";
 import { RightDock } from "../features/panels/RightDock";
-
-// Streams is always shown; whether the renderer has a webcam is decided
-// inside AddStreamModal's device picker, which gracefully shows "No video
-// inputs detected" on headless boxes. The previous gating made it
-// impossible to add a network stream from a headless host (chicken-and-egg
-// — the only way in was hidden by its own absence).
-const tabs = [
-  { to: "/", label: "SkyView" },
-  { to: "/devices", label: "Devices" },
-  { to: "/tasks", label: "Tasks" },
-  { to: "/images", label: "Images" },
-  { to: "/status", label: "Status" },
-  { to: "/streams", label: "Streams" },
-  { to: "/settings", label: "Settings" },
-] as const;
+import {
+  useTabsStore,
+  reconcileOrder,
+  tabsFromOrder,
+  type TabDef,
+  type TabId,
+} from "../stores/tabs";
+import {
+  openTabWindow,
+  onTabWindowClosed,
+  listDetachedTabs,
+} from "../lib/electron-bridge";
 
 export function AppLayout() {
   const connection = useSensorKitStore((s) => s.connection);
   const { observer } = useObserver();
+  const syncDetached = useTabsStore((s) => s.syncDetached);
+  const setDetached = useTabsStore((s) => s.setDetached);
+
+  // Keep the strip's detached markers in sync with the main process: restore the
+  // set on (re)mount — covers a main-window reload while tab windows are open —
+  // and re-dock a tab as soon as its window closes. Both are no-ops in a browser.
+  useEffect(() => {
+    listDetachedTabs()
+      .then((ids) => syncDetached(ids))
+      .catch(() => {});
+    return onTabWindowClosed((id) => setDetached(id as TabId, false));
+  }, [syncDetached, setDetached]);
 
   return (
     <div className="w-full h-screen flex flex-col bg-sky-ink">
@@ -37,28 +46,7 @@ export function AppLayout() {
           className="mr-6 h-[26px] w-auto select-none"
           draggable={false}
         />
-        {tabs.map((tab) => (
-          <NavLink
-            key={tab.to}
-            to={tab.to}
-            end={tab.to === "/"}
-            className={({ isActive }) =>
-              `px-[14px] py-2 text-[12.5px] transition-colors ${
-                isActive
-                  ? "text-ink font-medium"
-                  : "text-paper-dim hover:text-ink"
-              }`
-            }
-            style={({ isActive }) => ({
-              borderBottom: isActive
-                ? "2px solid var(--color-brass)"
-                : "2px solid transparent",
-              letterSpacing: "0.1px",
-            })}
-          >
-            {tab.label}
-          </NavLink>
-        ))}
+        <TabStrip />
         <div className="ml-auto flex items-center gap-[14px]">
           <AgentControlMenu connection={connection} />
           <UtcClock />
@@ -74,6 +62,273 @@ export function AppLayout() {
         </div>
         <RightDock />
       </div>
+    </div>
+  );
+}
+
+/**
+ * The main navigation tabs, rendered from the persisted tab-order store.
+ *
+ *  - Reorder: press a tab and drag — it lifts and follows the cursor while the
+ *    others slide apart to open the gap where it will land (Chrome-style). Built
+ *    on pointer events (reliable in Electron + browser, no dependency); the
+ *    order survives reloads.
+ *  - Detach: the ⧉ button (hover to reveal) pops the tab out into its own OS
+ *    window in Electron, or drag a tab clear of the strip to tear it off; the
+ *    tab then shows italic/dimmed with a brass ⧉ — click either to focus the
+ *    window. Closing the window (or its Dock button) re-docks it. In a plain
+ *    browser there's no true detach, so ⧉ just opens a new window.
+ *
+ * Streams is always present; whether the renderer has a webcam is decided
+ * inside AddStreamModal's device picker, which gracefully shows "No video
+ * inputs detected" on headless boxes.
+ */
+function TabStrip() {
+  const order = useTabsStore((s) => s.order);
+  const reorderTo = useTabsStore((s) => s.reorderTo);
+  const detached = useTabsStore((s) => s.detached);
+  const setDetached = useTabsStore((s) => s.setDetached);
+  const tabs = tabsFromOrder(reconcileOrder(order));
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const stripRef = useRef<HTMLDivElement>(null);
+  // Live pointer-drag bookkeeping that must not trigger re-renders. `mids` are
+  // the tab midpoints captured at pickup, so the drop slot is measured against a
+  // fixed layout (not the shifting one); `moved` gates click-vs-drag.
+  const dragRef = useRef<{
+    id: TabId;
+    pointerId: number;
+    grabOffset: number;
+    gapWidth: number;
+    mids: { id: string; mid: number }[];
+    startX: number;
+    startY: number;
+    moved: boolean;
+    captured: boolean;
+  } | null>(null);
+  // Set right after a drag so the click that trails it doesn't navigate.
+  const justDragged = useRef(false);
+  // The render-affecting slice of the drag: which tab is lifted, where it will
+  // land, where the lifted tab floats (px from the strip's left edge), and
+  // whether the pointer is off the strip (tear-off).
+  const [drag, setDrag] = useState<{
+    id: TabId;
+    dropIndex: number;
+    floatX: number;
+    gapWidth: number;
+    offStrip: boolean;
+  } | null>(null);
+
+  /** Pop a docked tab out into its own window (no-op if already detached). */
+  const detachTab = async (tab: TabDef) => {
+    if (detached.includes(tab.id)) return;
+    const wasActive = location.pathname === tab.to;
+    const detachedForReal = await openTabWindow(tab.id);
+    if (!detachedForReal) return; // browser: opened a plain window, tab stays docked
+    setDetached(tab.id, true);
+    // If we popped out the tab that's showing, move the main window to the first
+    // still-docked tab so it isn't mirroring the detached window.
+    if (wasActive) {
+      const fallback = tabs.find((t) => t.id !== tab.id && !detached.includes(t.id));
+      if (fallback) navigate(fallback.to);
+    }
+  };
+
+  const popOut = (tab: TabDef) => {
+    // Already out → just bring its window forward; otherwise detach it.
+    if (detached.includes(tab.id)) {
+      void openTabWindow(tab.id);
+      return;
+    }
+    void detachTab(tab);
+  };
+
+  const isOffStrip = (clientY: number): boolean => {
+    const r = stripRef.current?.closest("nav")?.getBoundingClientRect();
+    return r ? clientY > r.bottom + 24 || clientY < r.top - 24 : false;
+  };
+  // Slot = how many other tabs sit (by their pickup-time midpoint) left of the cursor.
+  const dropSlot = (clientX: number, d: NonNullable<typeof dragRef.current>): number => {
+    let idx = 0;
+    for (const it of d.mids) if (it.id !== d.id && clientX > it.mid) idx++;
+    return idx;
+  };
+
+  const onTabPointerDown = (e: ReactPointerEvent, tab: TabDef) => {
+    if (e.button !== 0 || dragRef.current) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    dragRef.current = {
+      id: tab.id,
+      pointerId: e.pointerId,
+      grabOffset: e.clientX - rect.left,
+      gapWidth: rect.width,
+      mids: [...(stripRef.current?.querySelectorAll<HTMLElement>("[data-tabid]") ?? [])].map(
+        (c) => {
+          const r = c.getBoundingClientRect();
+          return { id: c.dataset.tabid as string, mid: r.left + r.width / 2 };
+        },
+      ),
+      startX: e.clientX,
+      startY: e.clientY,
+      moved: false,
+      captured: false,
+    };
+  };
+
+  const onStripPointerMove = (e: ReactPointerEvent) => {
+    const d = dragRef.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    if (!d.moved) {
+      // Only start dragging past a small threshold, so a plain click still navigates.
+      if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < 5) return;
+      d.moved = true;
+      try {
+        stripRef.current?.setPointerCapture(e.pointerId);
+        d.captured = true;
+      } catch {
+        /* pointer may already have ended */
+      }
+    }
+    e.preventDefault();
+    const stripLeft = stripRef.current?.getBoundingClientRect().left ?? 0;
+    setDrag({
+      id: d.id,
+      dropIndex: dropSlot(e.clientX, d),
+      floatX: e.clientX - stripLeft - d.grabOffset,
+      gapWidth: d.gapWidth,
+      offStrip: isOffStrip(e.clientY),
+    });
+  };
+
+  const finishDrag = (e: ReactPointerEvent, commit: boolean) => {
+    const d = dragRef.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    if (d.captured) {
+      try {
+        stripRef.current?.releasePointerCapture(d.pointerId);
+      } catch {
+        /* already released */
+      }
+    }
+    const { id, moved } = d;
+    const slot = dropSlot(e.clientX, d);
+    const off = isOffStrip(e.clientY);
+    dragRef.current = null;
+    setDrag(null);
+    if (!commit || !moved) return; // a plain click — let the NavLink navigate
+    justDragged.current = true;
+    setTimeout(() => {
+      justDragged.current = false;
+    }, 0);
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab) return;
+    if (off && !detached.includes(id)) void detachTab(tab);
+    else reorderTo(id, slot);
+  };
+
+  // Order with the dragged tab removed — the space dropIndex is measured in.
+  const visibleIds = drag == null ? [] : tabs.filter((t) => t.id !== drag.id).map((t) => t.id);
+
+  return (
+    <div
+      ref={stripRef}
+      className="relative flex items-center gap-1 h-full"
+      onPointerMove={onStripPointerMove}
+      onPointerUp={(e) => finishDrag(e, true)}
+      onPointerCancel={(e) => finishDrag(e, false)}
+    >
+      {tabs.map((tab) => {
+        const isDragging = drag?.id === tab.id;
+        const isOut = detached.includes(tab.id);
+        // Other tabs slide right to open the gap; it collapses once the pointer
+        // is off the strip (the drag will tear the tab off instead of reordering).
+        const shift =
+          drag && !drag.offStrip && !isDragging && visibleIds.indexOf(tab.id) >= drag.dropIndex
+            ? drag.gapWidth
+            : 0;
+        return (
+          <div
+            key={tab.id}
+            data-tabid={tab.id}
+            className="relative flex group"
+            style={
+              isDragging
+                ? {
+                    // The lifted tab floats out of flow and follows the cursor.
+                    position: "absolute",
+                    left: drag!.floatX,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    zIndex: 30,
+                    pointerEvents: "none",
+                    opacity: drag!.offStrip ? 0.55 : 0.97,
+                    background: "var(--color-paper)",
+                    borderRadius: 6,
+                    boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
+                    transition: "opacity 120ms ease",
+                  }
+                : { transform: `translateX(${shift}px)`, transition: "transform 160ms ease" }
+            }
+          >
+            <NavLink
+              to={tab.to}
+              end={tab.to === "/"}
+              draggable={false}
+              onPointerDown={(e) => onTabPointerDown(e, tab)}
+              onClick={(e) => {
+                // Swallow the click that trails a drag, and focus (not navigate)
+                // a detached tab's own window.
+                if (justDragged.current) {
+                  e.preventDefault();
+                  return;
+                }
+                if (isOut) {
+                  e.preventDefault();
+                  void openTabWindow(tab.id);
+                }
+              }}
+              title={
+                isOut ? `${tab.label} is open in its own window — click to focus` : undefined
+              }
+              className={({ isActive }) =>
+                `pl-[14px] pr-[24px] py-2 text-[12.5px] transition-colors select-none cursor-grab active:cursor-grabbing ${
+                  isActive && !isOut
+                    ? "text-ink font-medium"
+                    : "text-paper-dim hover:text-ink"
+                } ${isOut ? "italic opacity-70" : ""}`
+              }
+              style={({ isActive }) => ({
+                borderBottom:
+                  isActive && !isOut
+                    ? "2px solid var(--color-brass)"
+                    : "2px solid transparent",
+                letterSpacing: "0.1px",
+              })}
+            >
+              {tab.label}
+            </NavLink>
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void popOut(tab);
+              }}
+              title={isOut ? "Focus window" : "Open in its own window"}
+              aria-label={isOut ? `Focus ${tab.label} window` : `Pop out ${tab.label}`}
+              className={`absolute top-1/2 -translate-y-1/2 right-[3px] flex items-center justify-center w-4 h-4 rounded text-[11px] leading-none cursor-pointer transition-opacity hover:text-ink ${
+                isOut
+                  ? "text-brass opacity-100"
+                  : "text-paper-dim opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              }`}
+            >
+              ⧉
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

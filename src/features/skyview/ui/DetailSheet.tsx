@@ -947,9 +947,10 @@ function CollectSplitButton({
             <button
               key={p.id}
               onClick={() => {
+                // Selecting a preset only makes it the default; it does not
+                // start a collect. The user starts it with the Collect button.
                 setDefault(p.id);
                 setOpen(false);
-                if (!disabled) onCollect(p);
               }}
               className={`w-full text-left px-2 py-1.5 rounded hover:bg-white/10 ${
                 p.id === defaultPresetId ? "text-text-bright" : "text-text-dim"

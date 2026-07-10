@@ -58,12 +58,30 @@ ipcRenderer.on("docker:log-chunk", (_event, payload) => {
   }
 });
 
+const tabClosedListeners = new Set();
+ipcRenderer.on("tab:closed", (_event, tabId) => {
+  for (const cb of tabClosedListeners) {
+    try {
+      cb(tabId);
+    } catch (err) {
+      console.error("tab:closed listener threw:", err);
+    }
+  }
+});
+
 contextBridge.exposeInMainWorld("electronAPI", {
   isElectron: true,
   platform: process.platform,
 
   getSidecarPort: () => ipcRenderer.invoke("sidecar:port"),
   openSkyviewPopout: () => ipcRenderer.invoke("popout:open"),
+  openTabWindow: (tabId) => ipcRenderer.invoke("tab:open", tabId),
+  listDetachedTabs: () => ipcRenderer.invoke("tab:list"),
+  onTabWindowClosed: (cb) => {
+    tabClosedListeners.add(cb);
+    return () => tabClosedListeners.delete(cb);
+  },
+  closeTabWindow: (tabId) => ipcRenderer.invoke("tab:close", tabId),
   openExternal: (url) => ipcRenderer.send("shell:open-external", url),
 
   onSidecarReady: (cb) => {
