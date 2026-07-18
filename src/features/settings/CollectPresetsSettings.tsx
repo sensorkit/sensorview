@@ -32,11 +32,6 @@ export function CollectPresetsSettings({ focusNewOnMount = false }: { focusNewOn
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-text-dim">
-        Define reusable parameter sets for the Collect action. The default preset is used
-        when you click Collect without picking from the dropdown.
-      </p>
-
       <div className="space-y-2">
         {presets.map((p) => (
           <PresetRow

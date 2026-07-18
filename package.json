@@ -1,7 +1,7 @@
 {
   "name": "sensorview",
   "private": true,
-  "version": "0.1.15",
+  "version": "0.1.16",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@types/d3-selection": "^3.0.11",
+    "@types/leaflet": "^1.9.21",
     "astronomy-engine": "^2.1.19",
     "d3-geo": "^3.1.1",
     "d3-quadtree": "^3.0.1",
@@ -27,6 +28,7 @@
     "electron-window-state": "^5.0.3",
     "hls.js": "^1.6.16",
     "js9": "^3.9.0",
+    "leaflet": "^1.9.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.14.1",

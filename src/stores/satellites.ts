@@ -7,6 +7,8 @@ export interface TLERecord {
   line2: string;
   objectType?: "PAYLOAD" | "ROCKET_BODY" | "DEBRIS" | "UNKNOWN";
   orbitRegime?: "LEO" | "MEO" | "GEO" | "HEO" | "OTHER";
+  /** Which configured TLE source won the priority merge for this satellite. */
+  source?: string;
 }
 
 export interface SatellitePosition {

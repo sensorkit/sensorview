@@ -1,34 +1,20 @@
 import { useMemo } from "react";
-import { useSensorKitSlice } from "../../../stores/sensorkit";
+import {
+  isControllerState,
+  useSensorKitSlice,
+  type SensorKitStore,
+} from "../../../stores/sensorkit";
+import { useObserverStore } from "../../../stores/observer";
+import type { SitePosition } from "../../../lib/sensorkit-client/types";
 
-export interface ObserverLocation {
-  lat: number;
-  lon: number;
-  alt: number;
-  name: string;
-}
+// Re-exported from its canonical home (the observer store) so the ~15 SkyView
+// modules that `import type { ObserverLocation } from "../hooks/useObserver"`
+// keep resolving without churn.
+export type { ObserverLocation } from "../../../stores/observer";
+import type { ObserverLocation } from "../../../stores/observer";
 
-// Fallback observer until SensorKit reports SitePosition
-const DEFAULT_OBSERVER: ObserverLocation = {
-  lat: 20.7084,
-  lon: -156.2568,
-  alt: 3055,
-  name: "Haleakala, Maui",
-};
-
-/**
- * SK reports the entity kind via `EntityInfo.entity_type` (current shape).
- * Older SK builds put it at top-level `type` — accept either so the same
- * SensorView build works across SK versions during the rollout window.
- */
-function isController(entityState: Record<string, unknown>): boolean {
-  const info = entityState["EntityInfo"] as
-    | { entity_type?: string }
-    | undefined;
-  if (info?.entity_type === "controller") return true;
-  if ((entityState as { type?: string }).type === "controller") return true;
-  return false;
-}
+/** Which site SkyView is currently using. Drives the Settings readout. */
+export type ObserverSource = "live" | "manual";
 
 /**
  * Compute Greenwich Mean Sidereal Time in degrees for a given Date.
@@ -93,7 +79,7 @@ export function radecToAltAz(
 }
 
 /**
- * Hook that provides the observer location and current zenith.
+ * Derive the live SensorKit observing site, or `null` when none is available.
  *
  * `SitePosition` is read exclusively from the **controller** entity. Some
  * mount modules (e.g. alpaca) also republish their underlying driver's site
@@ -102,49 +88,83 @@ export function radecToAltAz(
  * operator-configured source of truth and is mount-agnostic, so we ignore
  * device-level SitePosition entirely.
  *
- * Falls back to the hardcoded default when no controller has published yet.
+ * Gated on a live transport (`connection === "open"`) AND the controller's
+ * `EntityLease` — SK forwards a lease delete as `payload: null` and our
+ * reducer pops the key, so `"EntityLease" in state[entity]` is the canonical
+ * "alive right now" signal. Without this gate a controller that died mid-
+ * session would keep imposing its last-known SitePosition on SkyView even
+ * though the site is really just whatever the operator wants offline.
  */
-export function useObserver() {
-  // Subscribe to the derived observer location — NOT the whole `state` map.
-  // This hook is mounted by AppLayout and AtlasContainer (i.e. the entire
-  // SkyView tree hangs off it): a whole-state subscription re-rendered all
-  // of it on every telemetry record, which was the dominant share of the
-  // renderer-pegging reconciliation storm. The slice's equality compare also
-  // keeps the returned identity stable, which downstream `useMemo([…,
-  // observer])` consumers rely on — most importantly `useStarAltitudes`,
-  // which recomputes alt/az for every catalog star (≈118k rows on HIP) and
-  // is mounted in three places. The site essentially never moves during a
-  // session, so this hook now re-renders ~never while streaming.
-  const observer = useSensorKitSlice<ObserverLocation>(
-    (s) => {
-      for (const [entityKey, entityState] of Object.entries(s.state)) {
-        if (!isController(entityState)) continue;
-        const sp = entityState["SitePosition"] as
-          | { latitude_degrees: number; longitude_degrees: number; altitude_km: number }
-          | undefined;
-        if (sp) {
-          return {
-            lat: sp.latitude_degrees,
-            lon: sp.longitude_degrees,
-            alt: sp.altitude_km * 1000,
-            name: entityKey,
-          };
-        }
-      }
-      return DEFAULT_OBSERVER;
-    },
-    // Object.is, not ===: a NaN field (e.g. malformed SitePosition) would
-    // make === report "changed" on every compare, and an equality fn that
-    // never says "equal" turns this subscription into an infinite render
-    // loop that hard-pegs the main thread.
+function selectLiveSite(state: SensorKitStore): ObserverLocation | null {
+  if (state.connection !== "open") return null;
+  for (const [entityKey, entityState] of Object.entries(state.state)) {
+    if (!isControllerState(entityState)) continue;
+    if (!("EntityLease" in entityState)) continue; // liveness gate
+    const sp = entityState["SitePosition"] as SitePosition | undefined;
+    if (sp) {
+      return {
+        lat: sp.latitude_degrees,
+        lon: sp.longitude_degrees,
+        alt: sp.altitude_km * 1000,
+        name: entityKey,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Hook that provides the observer location, current zenith, and which source
+ * that location came from.
+ *
+ * Precedence:
+ *   1. Operator override on → the manually-configured site (Settings).
+ *   2. Otherwise a live controller `SitePosition` if one is available.
+ *   3. Otherwise the manual site — the offline fallback that lets SkyView run
+ *      with no live SensorKit connection at all.
+ *
+ * Performance: this hook is mounted by AppLayout and AtlasContainer (the whole
+ * SkyView tree hangs off it). The live-site subscription goes through
+ * `useSensorKitSlice`, whose equality compare keeps the derived value's
+ * identity stable so a per-telemetry-record `state` mutation doesn't re-render
+ * the tree. Both `manual` and `overrideSensorKit` come straight from the
+ * observer store, whose references only change on an operator edit. The final
+ * `useMemo` therefore returns a stable `observer` identity that never changes
+ * while streaming — which downstream `useMemo([…, observer])` consumers rely
+ * on, most importantly `useStarAltitudes` (alt/az for ≈118k HIP rows, mounted
+ * in three places).
+ */
+export function useObserver(): {
+  observer: ObserverLocation;
+  zenith: { ra: number; dec: number };
+  source: ObserverSource;
+} {
+  const manual = useObserverStore((s) => s.manual);
+  const overrideSensorKit = useObserverStore((s) => s.overrideSensorKit);
+
+  const liveSite = useSensorKitSlice<ObserverLocation | null>(
+    selectLiveSite,
+    // `a === b` catches the both-null case. Object.is (not ===) on the fields:
+    // a NaN in a malformed SitePosition must still compare equal to itself, or
+    // an equality fn that never says "equal" turns this into an infinite
+    // render loop that hard-pegs the main thread.
     (a, b) =>
-      Object.is(a.lat, b.lat) &&
-      Object.is(a.lon, b.lon) &&
-      Object.is(a.alt, b.alt) &&
-      a.name === b.name,
+      a === b ||
+      (!!a &&
+        !!b &&
+        Object.is(a.lat, b.lat) &&
+        Object.is(a.lon, b.lon) &&
+        Object.is(a.alt, b.alt) &&
+        a.name === b.name),
+  );
+
+  const useLive = !overrideSensorKit && liveSite !== null;
+  const observer = useMemo(
+    () => (useLive ? (liveSite as ObserverLocation) : manual),
+    [useLive, liveSite, manual],
   );
 
   const zenith = useMemo(() => zenithRADec(new Date(), observer), [observer]);
 
-  return { observer, zenith };
+  return { observer, zenith, source: useLive ? "live" : "manual" };
 }

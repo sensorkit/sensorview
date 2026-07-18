@@ -32,13 +32,13 @@ function seedPresets(): CollectPreset[] {
   return [
     {
       id: crypto.randomUUID(),
-      name: "Single 1s",
+      name: "Snapshot",
       integration_time_seconds: 1,
       frame_count: 1,
     },
     {
       id: crypto.randomUUID(),
-      name: "Quick",
+      name: "Burst",
       integration_time_seconds: 1,
       frame_count: 5,
     },
@@ -89,7 +89,7 @@ export const useCollectPresetsStore = create<CollectPresetsStore>()(
     },
     {
       name: "sensorview.collectPresets",
-      version: 3,
+      version: 6,
       migrate: (persistedState, fromVersion) => {
         const s = persistedState as {
           presets?: CollectPreset[];
@@ -134,6 +134,56 @@ export const useCollectPresetsStore = create<CollectPresetsStore>()(
               next.sidereal_frames = frames;
             }
             return next;
+          });
+        }
+
+        // v3/v4 → v5: the two built-in presets got clearer, parameter-encoded
+        // names. Guarded at `< 5` rather than `< 4` on purpose — a hot-reload
+        // during development can bump a persisted store to v4 without this
+        // rename taking effect, stranding it on the old names; re-running for
+        // any store below v5 heals those. Idempotent: only the original
+        // built-in name+shape matches, so a preset the user renamed is untouched.
+        if (fromVersion < 5) {
+          presets = presets.map((p) => {
+            if (
+              p.name === "Single 1s" &&
+              p.integration_time_seconds === 1 &&
+              p.frame_count === 1
+            ) {
+              return { ...p, name: "Snapshot: t=1, n=1" };
+            }
+            if (
+              p.name === "Quick" &&
+              p.integration_time_seconds === 1 &&
+              p.frame_count === 5
+            ) {
+              return { ...p, name: "Burst: t=1, n=5" };
+            }
+            return p;
+          });
+        }
+
+        // v5→v6: shortened the built-in names to just "Snapshot" and "Burst"
+        // (the parameters already show on the row below). Matches the
+        // intermediate name + shape, so a preset the user renamed stays put;
+        // chains off the block above for stores arriving from v3/v4.
+        if (fromVersion < 6) {
+          presets = presets.map((p) => {
+            if (
+              p.name === "Snapshot: t=1, n=1" &&
+              p.integration_time_seconds === 1 &&
+              p.frame_count === 1
+            ) {
+              return { ...p, name: "Snapshot" };
+            }
+            if (
+              p.name === "Burst: t=1, n=5" &&
+              p.integration_time_seconds === 1 &&
+              p.frame_count === 5
+            ) {
+              return { ...p, name: "Burst" };
+            }
+            return p;
           });
         }
 
