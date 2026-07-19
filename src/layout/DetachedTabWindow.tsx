@@ -41,14 +41,14 @@ export function DetachedTabWindow() {
 
   if (!def) {
     return (
-      <div className="w-screen h-screen flex items-center justify-center bg-sky-ink text-text-dim text-sm">
+      <div className="w-full h-dvh flex items-center justify-center bg-sky-ink text-text-dim text-sm">
         Unknown tab: {String(tabId)}
       </div>
     );
   }
 
   return (
-    <div className="w-screen h-screen flex flex-col overflow-hidden bg-sky-ink">
+    <div className="w-full h-dvh flex flex-col overflow-hidden bg-sky-ink">
       <DetachedHeader def={def} />
       <div className="flex-1 min-w-0 min-h-0">{PAGE_BY_TAB[def.id]}</div>
     </div>

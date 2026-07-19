@@ -46,9 +46,13 @@ export function usePaneResize(
         }
         el.removeEventListener("pointermove", onMove);
         el.removeEventListener("pointerup", onUp);
+        el.removeEventListener("pointercancel", onUp);
       };
       el.addEventListener("pointermove", onMove);
       el.addEventListener("pointerup", onUp);
+      // Touch: the browser can cancel the stream (scroll takeover, edge
+      // gesture); without this the listeners leak and stack per aborted drag.
+      el.addEventListener("pointercancel", onUp);
     },
     [axis, value, onChange, min, max, invert],
   );

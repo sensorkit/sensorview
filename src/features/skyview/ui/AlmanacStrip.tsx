@@ -213,8 +213,8 @@ function HeaderRow({ almanac }: { almanac: AlmanacDay }) {
 
   return (
     <div
-      className="flex items-center"
-      style={{ gap: 18, fontSize: 10.5, flex: "0 0 auto" }}
+      className="flex items-center flex-wrap gap-x-[18px] gap-y-1"
+      style={{ fontSize: 10.5, flex: "0 0 auto" }}
     >
       <span
         style={{
@@ -260,7 +260,7 @@ function HeaderRow({ almanac }: { almanac: AlmanacDay }) {
         <span className="mono" style={{ color: "var(--color-ink)" }}>
           {fmt(almanac.moonset)}
         </span>
-        <span style={{ color: "var(--color-paper-dim)", marginLeft: 6 }}>
+        <span className="max-sm:hidden" style={{ color: "var(--color-paper-dim)", marginLeft: 6 }}>
           {almanac.moonPhaseLabel} · {illumPct}%
         </span>
       </span>
@@ -279,7 +279,7 @@ function Legend() {
   ];
   return (
     <div
-      className="ml-auto flex items-center"
+      className="ml-auto flex items-center max-lg:hidden"
       style={{ gap: 10, fontSize: 10, color: "var(--color-paper-dim)" }}
     >
       {items.map(([label, bg]) => (

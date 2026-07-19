@@ -18,6 +18,7 @@ import { SkyCanvas } from "./views/SkyCanvas";
 import { OverheadCanvas } from "./views/OverheadCanvas";
 import { GroundTrackCanvas } from "./views/GroundTrackCanvas";
 import { usePaneResize } from "../panels/usePaneResize";
+import { useCompactLayout } from "../../lib/useMediaQuery";
 
 // V4 layout constants — see design_handoff_skyview/README.md
 const LEFT_RAIL_WIDTH = 68;
@@ -33,6 +34,12 @@ const FOOTER_HEIGHT = 40;
 
 export function AtlasContainer() {
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Below lg the three-column atlas doesn't fit: the rail becomes a top bar,
+  // the catalog becomes a toggleable bottom sheet, and the almanac/footer
+  // stack in flow. Desktop keeps the absolute V4 layout untouched.
+  const compact = useCompactLayout();
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [catalog, setCatalog] = useState<StarCatalog | null>(null);
@@ -169,7 +176,9 @@ export function AtlasContainer() {
     }).catch(() => loadTLEs(false));
   }, [loadTLEs]);
 
-  // Observe container resize
+  // Observe container resize. Keyed on `compact` because the scene div is a
+  // different element in each layout branch — the observer must re-attach
+  // when the viewport crosses the breakpoint.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -181,7 +190,7 @@ export function AtlasContainer() {
     });
     ro.observe(container);
     return () => ro.disconnect();
-  }, []);
+  }, [compact]);
 
   // The bottom-right `CATALOG N ▲ / N ≤ M` chip reflects whichever
   // catalog tab is currently active in the right-hand column, mirroring
@@ -208,6 +217,167 @@ export function AtlasContainer() {
     };
   }, [catalogTab, starAlts, catalog, selectedHorizonsTarget, positions, tles]);
 
+  // Scene + HUD are identical in both layouts; only the wrapper differs.
+  const scene = (
+    <>
+      <div ref={containerRef} className="absolute inset-0">
+        {viewMode === "sky" && (
+          <SkyCanvas
+            size={size}
+            catalog={catalog}
+            constellations={constellations}
+            observer={observer}
+            filteredPositions={filteredPositions}
+          />
+        )}
+        {viewMode === "overhead" && (
+          <OverheadCanvas
+            size={size}
+            observer={observer}
+            positions={regimeFilteredPositions}
+            landGeoJSON={landGeoJSONCoarse}
+          />
+        )}
+        {viewMode === "groundtrack" && (
+          <GroundTrackCanvas
+            size={size}
+            observer={observer}
+            positions={regimeFilteredPositions}
+            landGeoJSON={landGeoJSON}
+          />
+        )}
+      </div>
+
+      <SkyHUD
+        canvasWidth={size.width}
+        canvasHeight={size.height}
+        catalog={catalog}
+      />
+    </>
+  );
+
+  const footerContent = (
+    <>
+      <span
+        className="text-brass font-semibold uppercase"
+        style={{ fontSize: 10, letterSpacing: 1.5 }}
+      >
+        Observer
+      </span>
+      <span className="mono min-w-0 truncate">
+        {formatDMS(observer.lat, "lat")} · {formatDMS(observer.lon, "lon")} ·{" "}
+        {observer.alt.toFixed(0)} m
+      </span>
+      <MountActivityIndicator />
+      <button
+        className="mono text-[10px] px-2 py-0.5 pointer-coarse:py-1.5 pointer-coarse:px-2.5 rounded-sm text-paper-dim hover:text-paper"
+        style={{ border: "1px solid var(--color-brass-dim)" }}
+        onClick={() => loadTLEs(true)}
+        disabled={status === "loading" || status === "Refreshing satellite catalog..."}
+      >
+        {status === "Refreshing satellite catalog..." ? "refreshing…" : "refresh TLE"}
+      </button>
+      <span
+        className="text-brass font-semibold uppercase ml-auto"
+        style={{ fontSize: 10, letterSpacing: 1.5 }}
+      >
+        Catalog
+      </span>
+      {/* inline-flex with items-center keeps the ▲ and ≤ glyphs vertically
+          aligned with the digits (their natural baselines differ in the
+          mono font), and the explicit gap gives them breathing room. */}
+      <span className="mono inline-flex items-center" style={{ gap: 6 }}>
+        <span>{visibleCount}</span>
+        <span>▲</span>
+        <span>/</span>
+        <span>N</span>
+        <span>≤</span>
+        <span>{totalCount}</span>
+      </span>
+      <span className="mono text-paper-muted max-md:hidden" style={{ fontSize: 10 }}>
+        v{__APP_VERSION__}
+      </span>
+    </>
+  );
+
+  if (compact) {
+    return (
+      <div className="w-full h-full relative overflow-hidden bg-sky-ink text-paper flex flex-col">
+        {/* Rail as a horizontal top bar */}
+        <div
+          className="shrink-0 bg-rail-ink z-[4]"
+          style={{ borderBottom: "1px solid rgba(184,138,63,0.28)" }}
+        >
+          <LeftRail horizontal />
+        </div>
+
+        {/* Sky scene region — `isolate` keeps the HUD's z-indexes local so the
+            catalog sheet (a later sibling) always paints above them */}
+        <div className="relative isolate flex-1 min-h-0">
+          {scene}
+          {/* Catalog sheet toggle — the compact stand-in for the right column */}
+          <button
+            type="button"
+            onClick={() => setSheetOpen((v) => !v)}
+            className="absolute bottom-2.5 right-2.5 z-[6] px-3.5 py-2 rounded-full text-[11px] font-semibold uppercase bg-paper text-ink shadow-lg cursor-pointer"
+            style={{ border: "1px solid var(--color-brass)", letterSpacing: 1 }}
+          >
+            Catalog ▴
+          </button>
+        </div>
+
+        {/* Almanac strip — auto height so the header can wrap on phones.
+            overflow-hidden clips the timeline's deliberately-oversized inner
+            content (desktop relies on the atlas root for this). */}
+        <div
+          className="shrink-0 z-[3] overflow-hidden"
+          style={{
+            background: "rgba(244,234,212,0.96)",
+            borderTop: "1px solid var(--color-brass)",
+            borderBottom: "1px solid var(--color-brass-dim)",
+          }}
+        >
+          <AlmanacStrip />
+        </div>
+
+        {/* Status footer — wraps instead of clipping */}
+        <footer
+          className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5 text-[11px] text-paper-dim z-[5]"
+          style={{
+            background: "var(--color-topbar-ink)",
+            borderTop: "1px solid var(--color-brass-dim)",
+          }}
+        >
+          {footerContent}
+        </footer>
+
+        {/* Catalog bottom sheet */}
+        {sheetOpen && (
+          <div
+            className="absolute inset-x-0 bottom-0 top-[22%] z-[7] flex flex-col bg-paper shadow-[0_-10px_28px_rgba(0,0,0,0.55)]"
+            style={{ borderTop: "1px solid var(--color-brass)" }}
+          >
+            <button
+              type="button"
+              onClick={() => setSheetOpen(false)}
+              className="shrink-0 w-full py-1.5 text-[11px] uppercase text-paper-dim hover:text-ink cursor-pointer"
+              style={{
+                borderBottom: "1px solid var(--color-brass-dim)",
+                letterSpacing: 1,
+              }}
+              aria-label="Close catalog"
+            >
+              ▾ close
+            </button>
+            <div className="flex-1 min-h-0">
+              <CatalogColumn loading={status === "loading"} catalog={catalog} />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="w-full h-full relative overflow-hidden bg-sky-ink text-paper">
       {/* Left rail — view modes + orbit regime chips */}
@@ -232,39 +402,7 @@ export function AtlasContainer() {
           bottom: ALMANAC_HEIGHT + FOOTER_HEIGHT,
         }}
       >
-        <div ref={containerRef} className="absolute inset-0">
-          {viewMode === "sky" && (
-            <SkyCanvas
-              size={size}
-              catalog={catalog}
-              constellations={constellations}
-              observer={observer}
-              filteredPositions={filteredPositions}
-            />
-          )}
-          {viewMode === "overhead" && (
-            <OverheadCanvas
-              size={size}
-              observer={observer}
-              positions={regimeFilteredPositions}
-              landGeoJSON={landGeoJSONCoarse}
-            />
-          )}
-          {viewMode === "groundtrack" && (
-            <GroundTrackCanvas
-              size={size}
-              observer={observer}
-              positions={regimeFilteredPositions}
-              landGeoJSON={landGeoJSON}
-            />
-          )}
-        </div>
-
-        <SkyHUD
-          canvasWidth={size.width}
-          canvasHeight={size.height}
-          catalog={catalog}
-        />
+        {scene}
       </div>
 
       {/* Almanac strip — sun / twilight / moon over 24h for the observer */}
@@ -315,45 +453,7 @@ export function AtlasContainer() {
           borderTop: "1px solid var(--color-brass-dim)",
         }}
       >
-        <span
-          className="text-brass font-semibold uppercase"
-          style={{ fontSize: 10, letterSpacing: 1.5 }}
-        >
-          Observer
-        </span>
-        <span className="mono">
-          {formatDMS(observer.lat, "lat")} · {formatDMS(observer.lon, "lon")} ·{" "}
-          {observer.alt.toFixed(0)} m
-        </span>
-        <MountActivityIndicator />
-        <button
-          className="mono text-[10px] px-2 py-0.5 rounded-sm text-paper-dim hover:text-paper"
-          style={{ border: "1px solid var(--color-brass-dim)" }}
-          onClick={() => loadTLEs(true)}
-          disabled={status === "loading" || status === "Refreshing satellite catalog..."}
-        >
-          {status === "Refreshing satellite catalog..." ? "refreshing…" : "refresh TLE"}
-        </button>
-        <span
-          className="text-brass font-semibold uppercase ml-auto"
-          style={{ fontSize: 10, letterSpacing: 1.5 }}
-        >
-          Catalog
-        </span>
-        {/* inline-flex with items-center keeps the ▲ and ≤ glyphs vertically
-            aligned with the digits (their natural baselines differ in the
-            mono font), and the explicit gap gives them breathing room. */}
-        <span className="mono inline-flex items-center" style={{ gap: 6 }}>
-          <span>{visibleCount}</span>
-          <span>▲</span>
-          <span>/</span>
-          <span>N</span>
-          <span>≤</span>
-          <span>{totalCount}</span>
-        </span>
-        <span className="mono text-paper-muted" style={{ fontSize: 10 }}>
-          v{__APP_VERSION__}
-        </span>
+        {footerContent}
       </footer>
     </div>
   );

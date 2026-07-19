@@ -28,6 +28,9 @@ export function SkyHUD({
   const zoom = useSkyViewStore((s) => s.zoom);
   const overheadZoom = useSkyViewStore((s) => s.overheadZoom);
   const groundTrackZoom = useSkyViewStore((s) => s.groundTrackZoom);
+  const setZoom = useSkyViewStore((s) => s.setZoom);
+  const setOverheadZoom = useSkyViewStore((s) => s.setOverheadZoom);
+  const setGroundTrackZoom = useSkyViewStore((s) => s.setGroundTrackZoom);
   const showConstellations = useSkyViewStore((s) => s.showConstellations);
   const showSolarSystem = useSkyViewStore((s) => s.showSolarSystem);
   const toggleConstellations = useSkyViewStore((s) => s.toggleConstellations);
@@ -47,6 +50,17 @@ export function SkyHUD({
   const activeZoom =
     viewMode === "sky" ? zoom : viewMode === "overhead" ? overheadZoom : groundTrackZoom;
   const fovDeg = computeFovDegrees(viewMode, activeZoom, canvasWidth, canvasHeight);
+
+  // Wheel-less devices need buttons (pinch also works, but these are the
+  // discoverable path). Ranges mirror each canvas's wheel-zoom clamps.
+  const [zoomMin, zoomMax, setActiveZoom] =
+    viewMode === "sky"
+      ? ([0.5, 250, setZoom] as const)
+      : viewMode === "overhead"
+        ? ([0.08, 20, setOverheadZoom] as const)
+        : ([0.5, 20, setGroundTrackZoom] as const);
+  const stepZoom = (factor: number) =>
+    setActiveZoom(Math.max(zoomMin, Math.min(zoomMax, activeZoom * factor)));
 
   return (
     <div
@@ -118,8 +132,42 @@ export function SkyHUD({
             />
           </div>
         )}
+
+        {/* Touch devices have no wheel — give zoom explicit buttons. */}
+        <div className="hidden pointer-coarse:flex flex-col gap-1.5 mt-1">
+          <ZoomButton glyph="+" label="Zoom in" onClick={() => stepZoom(1.35)} />
+          <ZoomButton glyph="−" label="Zoom out" onClick={() => stepZoom(1 / 1.35)} />
+        </div>
       </div>
     </div>
+  );
+}
+
+function ZoomButton({
+  glyph,
+  label,
+  onClick,
+}: {
+  glyph: string;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="flex items-center justify-center w-10 h-10 rounded-md text-[20px] leading-none cursor-pointer select-none"
+      style={{
+        color: "var(--color-ink)",
+        background: "rgba(244,234,212,0.92)",
+        border: "1px solid var(--color-brass)",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
+      }}
+    >
+      {glyph}
+    </button>
   );
 }
 
@@ -190,12 +238,8 @@ function ToggleChip({
       onClick={onClick}
       title={`${label} · ${active ? "on" : "off"}`}
       aria-pressed={active}
+      className="inline-flex items-center justify-center w-6 h-6 pointer-coarse:w-10 pointer-coarse:h-10 pointer-coarse:text-[15px]"
       style={{
-        width: 24,
-        height: 24,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
         fontSize: 12,
         lineHeight: 1,
         background: active ? "rgba(184,138,63,0.16)" : "rgba(244,234,212,0.96)",

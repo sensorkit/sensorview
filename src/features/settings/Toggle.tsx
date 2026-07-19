@@ -44,7 +44,7 @@ export function Toggle({
       title={title}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`flex shrink-0 items-center gap-2 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/40 ${
+      className={`relative flex shrink-0 items-center gap-2 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-300/40 before:absolute before:-inset-2 before:content-[''] ${
         disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
       }`}
     >

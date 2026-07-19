@@ -84,13 +84,13 @@ export function WeatherCard() {
   const hasAny = basic || conditions || basicSafety || safetyBreakdown;
 
   return (
-    <div className="bg-panel-bg/60 border border-panel-border rounded-lg p-4 space-y-3 w-fit mx-auto">
+    <div className="bg-panel-bg/60 border border-panel-border rounded-lg p-4 space-y-3 w-fit max-w-full mx-auto">
       <div className="flex items-baseline justify-end">
         {weatherEntities.length > 1 ? (
           <select
             value={selected ?? ""}
             onChange={(e) => setSelected(e.target.value)}
-            className="bg-black/40 border border-panel-border rounded px-2 py-0.5 text-[11px] font-mono text-text-bright outline-none focus:border-orange-300/60"
+            className="bg-black/40 border border-panel-border rounded px-2 py-0.5 pointer-coarse:py-1.5 max-w-full text-[11px] font-mono text-text-bright outline-none focus:border-orange-300/60"
           >
             {weatherEntities.map((n) => (
               <option key={n} value={n}>
@@ -99,7 +99,9 @@ export function WeatherCard() {
             ))}
           </select>
         ) : (
-          <span className="text-[10px] text-text-dim font-mono">{selected}</span>
+          <span className="text-[10px] text-text-dim font-mono truncate max-w-full">
+            {selected}
+          </span>
         )}
       </div>
 

@@ -14,6 +14,11 @@
         overflow: hidden;
         background: #06101c;
       }
+      /* Size the app to the *visible* viewport on mobile browsers — 100% of the
+         ICB overshoots when the iOS/Android toolbar is collapsed. */
+      #root {
+        height: 100dvh;
+      }
     </style>
   </head>
   <body>

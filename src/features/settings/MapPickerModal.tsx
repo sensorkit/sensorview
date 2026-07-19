@@ -255,12 +255,12 @@ export function MapPickerModal({ initial, onConfirm, onCancel }: MapPickerModalP
         if (e.target === e.currentTarget) onCancel();
       }}
     >
-      <div className="flex h-[600px] max-h-[90vh] w-[900px] max-w-[95vw] flex-col overflow-hidden rounded-lg border border-panel-border bg-panel-bg shadow-2xl">
+      <div className="flex h-[min(600px,85dvh)] max-h-[90dvh] w-[900px] max-w-[95vw] flex-col overflow-hidden rounded-lg border border-panel-border bg-panel-bg shadow-2xl">
         <div className="flex items-center justify-between border-b border-panel-border px-4 py-2">
           <h3 className="text-sm font-semibold text-text-bright">Choose observer location</h3>
           <button
             onClick={onCancel}
-            className="rounded px-2 py-0.5 text-text-dim hover:bg-white/10 hover:text-text-bright"
+            className="rounded px-2 py-0.5 pointer-coarse:p-2 text-text-dim hover:bg-white/10 hover:text-text-bright"
             aria-label="Close"
           >
             ✕
@@ -289,7 +289,7 @@ export function MapPickerModal({ initial, onConfirm, onCancel }: MapPickerModalP
               <button
                 onClick={runSearchNow}
                 disabled={searching}
-                className="rounded border border-panel-border bg-black/70 px-2 py-1 text-xs text-text-bright shadow hover:bg-white/10 disabled:opacity-50"
+                className="rounded border border-panel-border bg-black/70 px-2 py-1 pointer-coarse:py-2 text-xs text-text-bright shadow hover:bg-white/10 disabled:opacity-50"
               >
                 {searching ? "…" : "Search"}
               </button>
@@ -302,7 +302,7 @@ export function MapPickerModal({ initial, onConfirm, onCancel }: MapPickerModalP
                   <li key={`${r.lat},${r.lon},${i}`}>
                     <button
                       onClick={() => selectResult(r)}
-                      className="block w-full truncate px-2 py-1 text-left text-[11px] text-text-bright hover:bg-white/10"
+                      className="block w-full truncate px-2 py-1 pointer-coarse:py-2.5 text-left text-[11px] text-text-bright hover:bg-white/10"
                       title={r.label}
                     >
                       {r.label}
@@ -344,13 +344,13 @@ export function MapPickerModal({ initial, onConfirm, onCancel }: MapPickerModalP
           <div className="flex gap-2">
             <button
               onClick={onCancel}
-              className="rounded border border-panel-border bg-white/5 px-3 py-1 uppercase tracking-wide text-[11px] text-text-dim hover:bg-white/10 hover:text-text-bright"
+              className="rounded border border-panel-border bg-white/5 px-3 py-1 pointer-coarse:py-2 uppercase tracking-wide text-[11px] text-text-dim hover:bg-white/10 hover:text-text-bright"
             >
               Cancel
             </button>
             <button
               onClick={() => onConfirm({ lat: pos.lat, lon: pos.lon, alt: Math.round(alt) })}
-              className="rounded border border-orange-300/60 bg-orange-300/15 px-3 py-1 uppercase tracking-wide text-[11px] text-orange-200 hover:bg-orange-300/25"
+              className="rounded border border-orange-300/60 bg-orange-300/15 px-3 py-1 pointer-coarse:py-2 uppercase tracking-wide text-[11px] text-orange-200 hover:bg-orange-300/25"
             >
               Use this location
             </button>

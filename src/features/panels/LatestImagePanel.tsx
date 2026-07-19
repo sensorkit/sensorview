@@ -38,11 +38,11 @@ function ControllerFilter({
 
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: PointerEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
     };
-    window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
   }, [open]);
 
   const active = value != null;
@@ -55,7 +55,7 @@ function ControllerFilter({
         onClick={() => setOpen((v) => !v)}
         aria-pressed={open}
         title="Filter by controller"
-        className="relative inline-flex items-center justify-center w-[18px] h-[18px] rounded-sm border border-panel-border cursor-pointer hover:bg-white/5"
+        className="relative inline-flex items-center justify-center w-[18px] h-[18px] rounded-sm border border-panel-border cursor-pointer hover:bg-white/5 before:absolute before:-inset-2.5 before:content-['']"
         style={{ background: open ? "rgba(255,255,255,0.08)" : "transparent" }}
       >
         <svg width="12" height="12" viewBox="0 0 14 14" aria-hidden>
@@ -74,13 +74,13 @@ function ControllerFilter({
         )}
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 z-50 min-w-[150px] max-h-[260px] overflow-auto rounded-md border border-panel-border bg-panel-bg/95 backdrop-blur-md shadow-xl py-1 text-[11px]">
+        <div className="absolute top-full left-0 mt-1 z-50 min-w-[150px] max-w-[calc(100vw-2rem)] sm:max-w-[240px] max-h-[260px] overflow-auto rounded-md border border-panel-border bg-panel-bg/95 backdrop-blur-md shadow-xl py-1 text-[11px]">
           <button
             onClick={() => {
               onPick(null);
               setOpen(false);
             }}
-            className={`block w-full text-left px-3 py-1 hover:bg-white/5 ${value == null ? "text-text-bright" : "text-text-dim"}`}
+            className={`block w-full text-left px-3 py-1 pointer-coarse:py-2.5 hover:bg-white/5 ${value == null ? "text-text-bright" : "text-text-dim"}`}
           >
             All
           </button>
@@ -92,7 +92,7 @@ function ControllerFilter({
                 setOpen(false);
               }}
               title={c}
-              className={`block w-full text-left px-3 py-1 hover:bg-white/5 truncate ${value === c ? "text-text-bright" : "text-text-dim"}`}
+              className={`block w-full text-left px-3 py-1 pointer-coarse:py-2.5 hover:bg-white/5 truncate ${value === c ? "text-text-bright" : "text-text-dim"}`}
             >
               {c}
             </button>

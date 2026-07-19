@@ -30,6 +30,10 @@ export interface JS9Global {
   /** Register a display div (by element id) with JS9. We call this once the
    *  persistent div is in the page; safe to call again (it dedups). */
   AddDivs?: (which?: string | string[]) => void;
+  /** Resize a display's canvas (public API; opts.display selects it). */
+  ResizeDisplay?: (width: number, height: number, opts?: Record<string, unknown>) => void;
+  /** Zoom the current image of a display (e.g. "toFit" after a resize). */
+  SetZoom?: (value: string | number, opts?: Record<string, unknown>) => void;
   /** Registered displays — read to avoid re-registering on remount. */
   displays?: Array<{ id: string }>;
   /** Flips true when JS9 finishes its one-time init (display scan + plugins).

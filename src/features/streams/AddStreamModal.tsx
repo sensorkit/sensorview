@@ -115,11 +115,11 @@ export function AddStreamModal({ open, editing, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={onClose}
     >
       <div
-        className="bg-panel-bg border border-panel-border rounded-lg p-5 w-[440px] max-w-[90vw] space-y-4"
+        className="bg-panel-bg border border-panel-border rounded-lg p-5 w-[440px] max-w-[90vw] max-h-[85dvh] overflow-y-auto space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-baseline justify-between">
@@ -129,7 +129,7 @@ export function AddStreamModal({ open, editing, onClose }: Props) {
           <button
             type="button"
             onClick={onClose}
-            className="text-text-dim hover:text-text-bright text-base"
+            className="text-text-dim hover:text-text-bright text-base p-2 -m-2"
             aria-label="Close"
           >
             ×
@@ -148,7 +148,7 @@ export function AddStreamModal({ open, editing, onClose }: Props) {
                 disabled={disabled}
                 onClick={() => setBranch(b)}
                 className={
-                  "px-3 py-1 text-[11px] uppercase tracking-wide rounded border transition-colors " +
+                  "px-3 py-1 pointer-coarse:py-2 text-[11px] uppercase tracking-wide rounded border transition-colors " +
                   (active
                     ? "bg-orange-300/15 text-orange-200 border-orange-300/60"
                     : "bg-white/5 text-text-dim border-panel-border hover:bg-white/10 hover:text-text-bright") +
@@ -194,7 +194,7 @@ export function AddStreamModal({ open, editing, onClose }: Props) {
                 <option value="webrtc">WebRTC / WHEP</option>
               </select>
             </Field>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <Field label="Username (optional)">
                 <input
                   type="text"
@@ -225,14 +225,14 @@ export function AddStreamModal({ open, editing, onClose }: Props) {
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1 text-[11px] uppercase tracking-wide rounded border border-panel-border bg-white/5 text-text-dim hover:bg-white/10 hover:text-text-bright"
+            className="px-3 py-1 pointer-coarse:py-2 text-[11px] uppercase tracking-wide rounded border border-panel-border bg-white/5 text-text-dim hover:bg-white/10 hover:text-text-bright"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={submit}
-            className="px-3 py-1 text-[11px] uppercase tracking-wide rounded border border-orange-300/60 bg-orange-300/15 text-orange-200 hover:bg-orange-300/25"
+            className="px-3 py-1 pointer-coarse:py-2 text-[11px] uppercase tracking-wide rounded border border-orange-300/60 bg-orange-300/15 text-orange-200 hover:bg-orange-300/25"
           >
             {editing ? "Save" : "Add"}
           </button>

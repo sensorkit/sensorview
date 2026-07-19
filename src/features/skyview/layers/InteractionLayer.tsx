@@ -88,14 +88,23 @@ export function InteractionLayer({
             )}
           </svg>
 
-          {/* Label */}
+          {/* Label — flips to the marker's left when there's no room on the
+              right (narrow viewports), so it can't clip under the edge. */}
           <div
             className="absolute pointer-events-none"
-            style={{
-              left: selected.x + 18,
-              top: selected.y - 10,
-              transform: "translateY(-50%)",
-            }}
+            style={
+              selected.x + 18 > width - 160
+                ? {
+                    right: width - selected.x + 18,
+                    top: selected.y - 10,
+                    transform: "translateY(-50%)",
+                  }
+                : {
+                    left: selected.x + 18,
+                    top: selected.y - 10,
+                    transform: "translateY(-50%)",
+                  }
+            }
           >
             <div className="text-xs bg-panel-bg/90 backdrop-blur-sm px-2 py-1 rounded border border-panel-border whitespace-nowrap shadow-lg">
               <div className="font-medium text-star-warm">{selected.name}</div>

@@ -12,6 +12,7 @@ import { renderHorizonsTarget } from "../layers/HorizonsTargetLayer";
 import { useMountPointings } from "../../../lib/sensorkit-client/instruments";
 import { useSolarSystemBodies } from "../hooks/useSolarSystemBodies";
 import { InteractionLayer } from "../layers/InteractionLayer";
+import { createPinchTracker } from "./pinchZoom";
 import { useAtlasInteraction } from "../hooks/useAtlasInteraction";
 import { useSatelliteTrack } from "../hooks/useSatelliteTrack";
 import { useSkyViewStore } from "../../../stores/skyview";
@@ -152,8 +153,25 @@ export function SkyCanvas({
       setZoom(currentZoom);
     };
 
+    // touch-none suppresses native pinch, so two-finger zoom is ours to run.
+    const pinch = createPinchTracker({
+      getZoom: () => currentZoom,
+      setZoom: (z) => {
+        currentZoom = z;
+        setZoom(z);
+      },
+      min: 0.5,
+      max: 250,
+    });
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      pinch.down(e);
+      if (pinch.pinching) {
+        // Second finger: the gesture is a pinch, not a pan or a click.
+        dragging = false;
+        return;
+      }
       dragging = true;
       didDrag = false;
       startX = e.clientX;
@@ -163,6 +181,7 @@ export function SkyCanvas({
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      if (pinch.move(e)) return;
       if (!dragging) return;
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
@@ -188,6 +207,10 @@ export function SkyCanvas({
     };
 
     const onPointerUp = (e: PointerEvent) => {
+      if (pinch.up(e)) {
+        dragging = false;
+        return;
+      }
       if (dragging && !didDrag) {
         const rect = container.getBoundingClientRect();
         const x = e.clientX - rect.left;
