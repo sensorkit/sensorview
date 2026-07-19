@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom";
 import { TLESettings } from "./TLESettings";
 import { CollectPresetsSettings } from "./CollectPresetsSettings";
 import { SensorKitConnectionSettings } from "./SensorKitConnectionSettings";
+import { SensorViewApiSettings } from "./SensorViewApiSettings";
 import { ObservationProgramSettings } from "./ObservationProgramSettings";
 import { DirectDeviceControlSettings } from "./DirectDeviceControlSettings";
 import { ObserverLocationSettings } from "./ObserverLocationSettings";
@@ -71,6 +72,21 @@ export function SettingsPage() {
           }
         >
           <SensorKitConnectionSettings />
+        </SettingsSection>
+
+        <SettingsSection
+          id="api-connection"
+          label="SensorView API"
+          tooltip={
+            <>
+              The bundled API sidecar (TLE cache, image thumbnails, stream
+              registration). The desktop app manages this automatically; set it
+              only when running SensorView in a browser served from a different
+              host than the API.
+            </>
+          }
+        >
+          <SensorViewApiSettings />
         </SettingsSection>
 
         <SettingsSection
