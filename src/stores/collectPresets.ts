@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { uuid } from "../lib/uuid";
 
 export type FrameType = "light" | "dark" | "bias" | "flat";
 
@@ -31,13 +32,13 @@ interface CollectPresetsStore {
 function seedPresets(): CollectPreset[] {
   return [
     {
-      id: crypto.randomUUID(),
+      id: uuid(),
       name: "Snapshot",
       integration_time_seconds: 1,
       frame_count: 1,
     },
     {
-      id: crypto.randomUUID(),
+      id: uuid(),
       name: "Burst",
       integration_time_seconds: 1,
       frame_count: 5,
@@ -61,7 +62,7 @@ export const useCollectPresetsStore = create<CollectPresetsStore>()(
         },
 
         addPreset: (preset) => {
-          const id = crypto.randomUUID();
+          const id = uuid();
           set((s) => ({
             presets: [...s.presets, { ...preset, id }],
             defaultPresetId: s.defaultPresetId ?? id,
@@ -106,7 +107,7 @@ export const useCollectPresetsStore = create<CollectPresetsStore>()(
           if (!hasSingle) {
             presets = [
               {
-                id: crypto.randomUUID(),
+                id: uuid(),
                 name: "Single 1s",
                 integration_time_seconds: 1,
                 frame_count: 1,
