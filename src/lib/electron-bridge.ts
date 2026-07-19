@@ -13,6 +13,7 @@ export function isRunningInElectron(): boolean {
 
 const STORAGE_KEY = "sensorview.sensorKitBase";
 const PROGRAM_STORAGE_KEY = "sensorview.programName";
+const API_STORAGE_KEY = "sensorview.sensorViewApi";
 
 /**
  * Initialise Electron integration:
@@ -31,6 +32,14 @@ export async function initElectronBridge(): Promise<() => void> {
     if (persisted) useBackends.getState().setSensorKit(persisted);
     const persistedProgram = localStorage.getItem(PROGRAM_STORAGE_KEY);
     if (persistedProgram) useBackends.getState().setProgramName(persistedProgram);
+    // The SensorView API base is only user-settable in a plain browser (to
+    // point a statically-hosted UI at a remote sidecar). In Electron the
+    // sidecar-ready IPC below is authoritative — its dynamic port must never be
+    // shadowed by a stale persisted value — so we deliberately don't restore it.
+    if (!api) {
+      const persistedApi = localStorage.getItem(API_STORAGE_KEY);
+      if (persistedApi) useBackends.getState().setSensorViewApi(persistedApi);
+    }
   } catch {
     /* localStorage unavailable (private window etc.) — ignore */
   }
@@ -60,6 +69,18 @@ export function persistSensorKitBase(value: string): void {
 export function persistProgramName(value: string): void {
   try {
     localStorage.setItem(PROGRAM_STORAGE_KEY, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Persist the SensorView API base. Only meaningful in a plain browser — see
+ * `initElectronBridge` for why Electron doesn't restore it.
+ */
+export function persistSensorViewApi(value: string): void {
+  try {
+    localStorage.setItem(API_STORAGE_KEY, value);
   } catch {
     /* ignore */
   }

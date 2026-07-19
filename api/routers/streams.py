@@ -16,7 +16,7 @@ from typing import AsyncIterator
 from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -24,12 +24,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# MediaMTX is spawned by the Electron host on the same machine; both the
-# control API and HLS server bind to loopback. These constants mirror what
-# resources/mediamtx.yml configures.
+# MediaMTX is spawned on the same machine; the control API is a server-to-
+# server call and always lives on loopback. The HLS/WebRTC ports, by contrast,
+# are what the *client* connects to, so the URLs we return are built from the
+# host the client used to reach us (see `_client_mtx_base`) rather than hard-
+# coding loopback: local Electron reaches the sidecar on 127.0.0.1 and so still
+# gets 127.0.0.1, while a browser arriving via a LAN IP / reverse proxy gets
+# that host and can actually load the stream off-box.
 MTX_CONTROL_BASE = "http://127.0.0.1:9997"
-MTX_HLS_BASE = "http://127.0.0.1:8888"
-MTX_WEBRTC_BASE = "http://127.0.0.1:8889"
+MTX_HLS_PORT = 8888
+MTX_WEBRTC_PORT = 8889
 
 # Path config defaults applied to every URL-kind stream we register.
 ON_DEMAND_DEFAULTS = {
@@ -60,12 +64,23 @@ class StreamStatus(BaseModel):
     error: str | None = None
 
 
-def _hls_url_for(stream_id: str) -> str:
-    return f"{MTX_HLS_BASE}/{stream_id}/index.m3u8"
+def _client_mtx_base(request: Request, port: int) -> str:
+    """Base URL for a client-facing MediaMTX port, on the host the client used.
+
+    `request.url.hostname` is the Host the caller reached the sidecar on, so
+    local Electron (127.0.0.1) yields 127.0.0.1 exactly as before; a LAN or
+    proxied client gets its own host instead of an unreachable loopback.
+    """
+    host = request.url.hostname or "127.0.0.1"
+    return f"http://{host}:{port}"
 
 
-def _whep_url_for(stream_id: str) -> str:
-    return f"{MTX_WEBRTC_BASE}/{stream_id}/whep"
+def _hls_url_for(stream_id: str, request: Request) -> str:
+    return f"{_client_mtx_base(request, MTX_HLS_PORT)}/{stream_id}/index.m3u8"
+
+
+def _whep_url_for(stream_id: str, request: Request) -> str:
+    return f"{_client_mtx_base(request, MTX_WEBRTC_PORT)}/{stream_id}/whep"
 
 
 def _embed_credentials(url: str, username: str | None, password: str | None) -> str:
@@ -90,7 +105,7 @@ def _embed_credentials(url: str, username: str | None, password: str | None) -> 
 
 
 @router.post("/url", response_model=UrlStreamResponse)
-async def register_url_stream(payload: UrlStreamPayload):
+async def register_url_stream(payload: UrlStreamPayload, request: Request):
     """Register or replace a path in MediaMTX for a URL-kind stream.
 
     Idempotent: calling with the same id repeatedly just overwrites the path
@@ -125,8 +140,8 @@ async def register_url_stream(payload: UrlStreamPayload):
 
     return UrlStreamResponse(
         id=payload.id,
-        hls_url=_hls_url_for(payload.id),
-        whep_url=_whep_url_for(payload.id),
+        hls_url=_hls_url_for(payload.id, request),
+        whep_url=_whep_url_for(payload.id, request),
     )
 
 
