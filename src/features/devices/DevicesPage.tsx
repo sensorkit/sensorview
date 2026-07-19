@@ -1019,13 +1019,11 @@ function FilterChangerBody({
           );
         })}
       </div>
-      {/* The per-button title tooltip never fires on touch — spell out why the
-          filter buttons are disabled so the row doesn't read as dead. */}
-      {(!directControl || !canSetFilter) && (
+      {/* Note only the rare case where the device itself lacks SetFilter; the
+          direct-control-off case is left to the buttons' hover tooltip. */}
+      {directControl && !canSetFilter && (
         <div className="text-[10px] text-text-dim">
-          {!directControl
-            ? "Enable Direct Device Control in Settings to change filters"
-            : "Device does not support SetFilter"}
+          Device does not support SetFilter
         </div>
       )}
       {status.phase !== "idle" && (
