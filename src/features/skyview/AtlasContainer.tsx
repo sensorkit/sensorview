@@ -256,6 +256,25 @@ export function AtlasContainer() {
     </>
   );
 
+  // inline-flex with items-center keeps the ▲ and ≤ glyphs vertically aligned
+  // with the digits (their natural baselines differ in the mono font), and the
+  // explicit gap gives them breathing room.
+  const catalogCounts = (
+    <span className="mono inline-flex items-center" style={{ gap: 6 }}>
+      <span>{visibleCount}</span>
+      <span>▲</span>
+      <span>/</span>
+      <span>N</span>
+      <span>≤</span>
+      <span>{totalCount}</span>
+    </span>
+  );
+  const version = (
+    <span className="mono text-paper-muted" style={{ fontSize: 10 }}>
+      v{__APP_VERSION__}
+    </span>
+  );
+
   const footerContent = (
     <>
       <span
@@ -277,26 +296,34 @@ export function AtlasContainer() {
       >
         {status === "Refreshing satellite catalog..." ? "refreshing…" : "refresh TLE"}
       </button>
-      <span
-        className="text-brass font-semibold uppercase ml-auto"
-        style={{ fontSize: 10, letterSpacing: 1.5 }}
-      >
-        Catalog
-      </span>
-      {/* inline-flex with items-center keeps the ▲ and ≤ glyphs vertically
-          aligned with the digits (their natural baselines differ in the
-          mono font), and the explicit gap gives them breathing room. */}
-      <span className="mono inline-flex items-center" style={{ gap: 6 }}>
-        <span>{visibleCount}</span>
-        <span>▲</span>
-        <span>/</span>
-        <span>N</span>
-        <span>≤</span>
-        <span>{totalCount}</span>
-      </span>
-      <span className="mono text-paper-muted max-md:hidden" style={{ fontSize: 10 }}>
-        v{__APP_VERSION__}
-      </span>
+      {compact ? (
+        // Keep the catalog label, counts, and version as one right-aligned
+        // block — label on top, counts + version beneath — so the counts can't
+        // orphan onto their own line away from the "Catalog" heading.
+        <div className="ml-auto flex flex-col items-end leading-tight">
+          <span
+            className="text-brass font-semibold uppercase"
+            style={{ fontSize: 10, letterSpacing: 1.5 }}
+          >
+            Catalog
+          </span>
+          <span className="flex items-center gap-2">
+            {catalogCounts}
+            {version}
+          </span>
+        </div>
+      ) : (
+        <>
+          <span
+            className="text-brass font-semibold uppercase ml-auto"
+            style={{ fontSize: 10, letterSpacing: 1.5 }}
+          >
+            Catalog
+          </span>
+          {catalogCounts}
+          {version}
+        </>
+      )}
     </>
   );
 
