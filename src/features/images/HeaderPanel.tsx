@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import type { ProductMetadata } from "../../lib/sensorkit-client/types";
 
 function formatVal(v: unknown): string {
@@ -22,12 +23,14 @@ export function HeaderPanel({ meta }: Props) {
 
   return (
     <div className="p-2">
-      <dl className="space-y-0.5 font-mono text-[10px]">
+      {/* Two aligned columns (DS9-style): keys sized to the widest keyword,
+          values left-aligned in a shared column and wrapping within it. */}
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 font-mono text-[10px]">
         {entries.map(([k, v]) => (
-          <div key={k} className="flex gap-2">
-            <dt className="shrink-0 text-text-dim">{k}</dt>
-            <dd className="break-all text-text-bright">{formatVal(v)}</dd>
-          </div>
+          <Fragment key={k}>
+            <dt className="text-text-dim">{k}</dt>
+            <dd className="min-w-0 break-all text-text-bright">{formatVal(v)}</dd>
+          </Fragment>
         ))}
       </dl>
     </div>
