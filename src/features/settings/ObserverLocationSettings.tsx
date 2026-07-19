@@ -4,6 +4,7 @@ import { useObserver } from "../skyview/hooks/useObserver";
 import { parseCoordinate, isInRange, formatDMS, type Axis } from "../../lib/coords";
 import { MapPickerModal } from "./MapPickerModal";
 import { Toggle } from "./Toggle";
+import { InfoTooltip } from "./InfoTooltip";
 
 /**
  * Observer Location settings. Lets the operator set a site manually (decimal
@@ -64,23 +65,20 @@ export function ObserverLocationSettings() {
       </div>
 
       <div className="border-t border-panel-border pt-3">
-        <div className="group relative flex w-fit items-center gap-2">
+        {/* InfoTooltip sits BESIDE the Toggle (not wrapping it) so a tap for
+            help can never flip the override state; it also gives this help
+            text a keyboard/touch path the old group-hover span lacked. */}
+        <div className="flex w-fit items-center gap-2">
           <Toggle
             checked={overrideSensorKit}
             onChange={setOverride}
             label="Override SensorKit"
           />
-          <span className="text-text-dim" aria-hidden>
-            ⓘ
-          </span>
-          <span
-            role="tooltip"
-            className="pointer-events-none absolute left-0 top-full z-10 mt-1 hidden w-80 rounded border border-panel-border bg-panel-bg px-3 py-2 text-xs font-normal text-text-dim shadow-lg group-hover:block"
-          >
+          <InfoTooltip label="About Override SensorKit">
             When on, SkyView always uses the site above. When off, a live SensorKit controller's
             reported site is used if available — and the site above is the fallback whenever no live
             connection is present, so SkyView still works offline.
-          </span>
+          </InfoTooltip>
         </div>
       </div>
 

@@ -91,14 +91,14 @@ export function MountActivityIndicator() {
         title="Click for details"
       >
         <StatusDot kind={active.kind} />
-        <span className="text-text-bright font-mono truncate max-w-[16rem]">
+        <span className="text-text-bright font-mono truncate max-w-[45vw] lg:max-w-[16rem]">
           {describeActivity(active, frameIndex)}
         </span>
         <span className="text-text-dim">▾</span>
       </button>
 
       {open && (
-        <div className="absolute bottom-full right-0 mb-1 w-80 z-30 rounded-lg border border-panel-border bg-panel-bg/95 backdrop-blur-md shadow-xl p-2 text-xs space-y-1">
+        <div className="fixed inset-x-2 bottom-12 lg:absolute lg:inset-x-auto lg:bottom-full lg:right-0 lg:mb-1 lg:w-80 z-30 rounded-lg border border-panel-border bg-panel-bg/95 backdrop-blur-md shadow-xl p-2 text-xs space-y-1">
           {activities.map((a) => (
             <InstrumentPanel
               key={a.instrumentId}

@@ -74,7 +74,7 @@ export function StatusPage() {
         {agentRowEntity && (
               <section>
                 <h2 className="text-text-bright text-sm mb-2">Agent</h2>
-                <div className="space-y-1">
+                <div className="space-y-1 pointer-coarse:space-y-2">
                   <EntityRow
                     entity={agentRowEntity}
                     entityState={state[agentRowEntity.name]}
@@ -96,7 +96,7 @@ export function StatusPage() {
                     <h2 className="text-text-bright text-sm mb-2">
                       {label} ({items.length})
                     </h2>
-                    <div className="space-y-1">
+                    <div className="space-y-1 pointer-coarse:space-y-2">
                       {items.map((e) => (
                         <EntityRow
                           key={e.name}
@@ -132,7 +132,7 @@ function EntityRow({
         type="button"
         onClick={() => expandable && setExpanded((v) => !v)}
         disabled={!expandable}
-        className={`w-full flex items-center gap-2 text-xs font-mono py-1 text-left ${
+        className={`w-full flex items-center gap-2 text-xs font-mono py-1 pointer-coarse:py-2.5 text-left ${
           expandable ? "cursor-pointer hover:bg-white/[0.02]" : "cursor-default"
         }`}
       >
@@ -144,8 +144,12 @@ function EntityRow({
             entity.online ? "bg-green-400" : "bg-gray-500"
           }`}
         />
-        <span className="text-text-bright w-40 truncate">{entity.name}</span>
-        <span className="text-text-dim">{entity.archetype ?? ""}</span>
+        <span className="text-text-bright min-w-0 flex-1 max-w-40 truncate">
+          {entity.name}
+        </span>
+        <span className="text-text-dim truncate min-w-0 flex-1">
+          {entity.archetype ?? ""}
+        </span>
       </button>
 
       {expanded && (
@@ -168,7 +172,7 @@ function Block({ label, value }: { label: string; value: unknown }) {
       <div className="text-[10px] uppercase tracking-wider text-text-dim mb-0.5">
         {label}
       </div>
-      <pre className="text-[11px] font-mono bg-black/30 border border-panel-border rounded p-2 overflow-auto max-h-[40vh] whitespace-pre text-text-bright">
+      <pre className="text-[11px] font-mono bg-black/30 border border-panel-border rounded p-2 overflow-auto max-h-[40dvh] whitespace-pre text-text-bright">
         {JSON.stringify(value, null, 2)}
       </pre>
     </div>

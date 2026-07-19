@@ -229,7 +229,7 @@ export function TLESettings() {
         <button
           onClick={refreshAll}
           disabled={!!busy.all}
-          className="px-3 py-1 text-xs rounded border border-panel-border hover:bg-white/10 text-text-dim disabled:opacity-50"
+          className="px-3 py-1 pointer-coarse:py-2 text-xs rounded border border-panel-border hover:bg-white/10 text-text-dim disabled:opacity-50"
         >
           {busy.all ? "Refreshing..." : "Refresh sources"}
         </button>
@@ -347,7 +347,7 @@ function SourceRow({
     <div
       ref={rowRef}
       className={
-        "flex items-center gap-3 px-3 py-2 rounded border transition-colors " +
+        "flex flex-wrap items-center gap-3 px-3 py-2 rounded border transition-colors " +
         (dragging
           ? "border-orange-300/60 bg-white/10"
           : "border-panel-border bg-black/20")
@@ -356,7 +356,7 @@ function SourceRow({
       <div
         {...handleProps}
         title="Drag to change priority"
-        className="flex items-center gap-1 text-text-dim cursor-grab active:cursor-grabbing touch-none select-none py-1"
+        className="flex items-center gap-1 text-text-dim cursor-grab active:cursor-grabbing touch-none select-none py-1 pointer-coarse:p-2 pointer-coarse:-m-1"
       >
         <span className="text-[10px] w-3 text-right tabular-nums">{index + 1}</span>
         <GripDots />
@@ -370,13 +370,13 @@ function SourceRow({
         aria-label={source.enabled ? "Disable source" : "Enable source"}
       />
 
-      <div className={`flex-1 min-w-0 ${source.enabled ? "" : "opacity-60"}`}>
+      <div className={`flex-1 min-w-40 ${source.enabled ? "" : "opacity-60"}`}>
         <div className="flex items-baseline gap-2">
-          <span className="text-sm text-text-bright">{label.name}</span>
+          <span className="text-sm text-text-bright whitespace-nowrap">{label.name}</span>
           <span className="text-xs text-text-dim truncate">{label.description}</span>
         </div>
         {source.id === "url" ? (
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex flex-wrap items-center gap-2 mt-1">
             <input
               type="text"
               value={urlValue}
@@ -385,7 +385,7 @@ function SourceRow({
                 if (e.key === "Enter") onFetchUrl();
               }}
               placeholder="https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
-              className="flex-1 min-w-0 bg-black/40 border border-panel-border rounded px-2 py-0.5 font-mono text-[11px] text-text-bright outline-none focus:border-orange-300/60"
+              className="flex-1 min-w-48 bg-black/40 border border-panel-border rounded px-2 py-0.5 font-mono text-[11px] text-text-bright outline-none focus:border-orange-300/60"
             />
             <RowButton onClick={onFetchUrl} disabled={busy}>
               {busy ? "Fetching..." : "Fetch"}
@@ -398,7 +398,7 @@ function SourceRow({
         {error && <div className="text-[11px] text-red-300 mt-0.5">{error}</div>}
       </div>
 
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="flex w-full justify-end gap-1.5 sm:w-auto sm:shrink-0 items-center">
         {source.id === "spacebook" && (
           <RowButton onClick={onRefresh} disabled={busy}>
             {busy ? "Refreshing..." : "Refresh"}
@@ -480,7 +480,7 @@ function RowButton({
     <button
       onClick={onClick}
       disabled={disabled}
-      className="px-2 py-0.5 text-[11px] rounded border border-panel-border hover:bg-white/10 text-text-dim hover:text-text-bright disabled:opacity-50 whitespace-nowrap"
+      className="px-2 py-0.5 pointer-coarse:px-3 pointer-coarse:py-1.5 text-[11px] rounded border border-panel-border hover:bg-white/10 text-text-dim hover:text-text-bright disabled:opacity-50 whitespace-nowrap"
     >
       {children}
     </button>

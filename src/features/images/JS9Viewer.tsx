@@ -175,6 +175,7 @@ export function JS9Viewer({ source, className }: Props) {
   const { ready, js9, error } = useJS9();
   const menubarHostRef = useRef<HTMLDivElement>(null);
   const canvasHostRef = useRef<HTMLDivElement>(null);
+  const scrollHostRef = useRef<HTMLDivElement>(null);
   const lastKeyRef = useRef<string | null>(null);
   const [valpos, setValpos] = useState("");
 
@@ -199,9 +200,29 @@ export function JS9Viewer({ source, className }: Props) {
     const nodes = persistentNodes();
     if (!ready || !js9 || !nodes || !menubarHostRef.current || !canvasHostRef.current) return;
 
+    // The pane, not the historical 800x600 default, dictates the display size —
+    // on a phone the pane is far smaller and a fixed display could never be
+    // seen whole. Measure before AddDivs so the first build is already right.
+    const paneSize = (): { w: number; h: number } | null => {
+      const host = scrollHostRef.current;
+      if (!host) return null;
+      // p-2 padding (8px/side) + the value/position readout line below.
+      const w = Math.floor(host.clientWidth - 16);
+      const h = Math.floor(host.clientHeight - 16 - 24);
+      if (w < 100 || h < 100) return null;
+      return { w: Math.max(200, w), h: Math.max(150, h) };
+    };
+
+    const firstBuild = !js9.displays?.some((d) => d.id === DISPLAY_ID);
+    const initial = paneSize();
+    if (firstBuild && initial) {
+      nodes.canvas.setAttribute("data-width", String(initial.w));
+      nodes.canvas.setAttribute("data-height", String(initial.h));
+    }
+
     menubarHostRef.current.appendChild(nodes.menubar);
     canvasHostRef.current.appendChild(nodes.canvas);
-    if (!js9.displays?.some((d) => d.id === DISPLAY_ID)) {
+    if (firstBuild) {
       try {
         js9.AddDivs?.(DISPLAY_ID);
       } catch {
@@ -209,7 +230,39 @@ export function JS9Viewer({ source, className }: Props) {
       }
     }
 
+    // Track the pane from then on (rotation, dock open/close, window resize).
+    // Debounced — ResizeDisplay rebuilds canvases, so once per settle is plenty.
+    let last = initial ?? { w: 0, h: 0 };
+    let timer: number | undefined;
+    const ro = new ResizeObserver(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const next = paneSize();
+        if (!next || (next.w === last.w && next.h === last.h)) return;
+        last = next;
+        try {
+          js9.ResizeDisplay?.(next.w, next.h, { display: DISPLAY_ID });
+          js9.SetZoom?.("toFit", { display: DISPLAY_ID });
+        } catch {
+          // no image open / display parked — harmless
+        }
+      }, 150);
+    });
+    if (scrollHostRef.current) ro.observe(scrollHostRef.current);
+    // Apply a measured size even when the display predates this mount (e.g.
+    // remounting into a differently-sized pane after a tab switch).
+    if (!firstBuild && initial) {
+      try {
+        js9.ResizeDisplay?.(initial.w, initial.h, { display: DISPLAY_ID });
+        js9.SetZoom?.("toFit", { display: DISPLAY_ID });
+      } catch {
+        // nothing open yet
+      }
+    }
+
     return () => {
+      ro.disconnect();
+      window.clearTimeout(timer);
       try {
         js9.CloseImage({ display: DISPLAY_ID, clear: false }); // free pixels while parked
       } catch {
@@ -295,8 +348,13 @@ export function JS9Viewer({ source, className }: Props) {
       )}
       {/* JS9's menubar and canvas are reparented into these hosts imperatively;
           React never owns the .JS9 nodes, so it can't recreate (and leak) them. */}
-      <div ref={menubarHostRef} className="shrink-0" />
-      <div className="flex min-h-0 flex-1 flex-col items-start overflow-auto p-2">
+      {/* overflow-x-auto: JS9's stock menubar is a fixed ~8-button row built
+          for 600px+ displays — let it scroll sideways on narrow panes. */}
+      <div ref={menubarHostRef} className="shrink-0 max-w-full overflow-x-auto" />
+      <div
+        ref={scrollHostRef}
+        className="flex min-h-0 min-w-0 flex-1 flex-col items-start overflow-auto p-2"
+      >
         <div ref={canvasHostRef} />
         <div className="mt-1 font-mono text-[11px] text-green-400">{formatValpos(valpos)}</div>
       </div>

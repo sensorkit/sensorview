@@ -91,7 +91,7 @@ function SatelliteDetail({ id, positions, tles, onClose }: {
   if (!sat) return null;
 
   return (
-    <div className="absolute bottom-10 right-4 max-w-sm z-20">
+    <div className="absolute bottom-10 left-4 right-4 sm:left-auto max-w-[calc(100vw-2rem)] sm:max-w-sm z-20">
       <div className="bg-panel-bg/95 backdrop-blur-md rounded-xl border border-panel-border shadow-2xl p-4">
         <div className="flex items-start justify-between mb-3">
           <div>
@@ -166,7 +166,7 @@ function StarDetail({ index, catalog, onClose }: {
   const decS = ((absDec - decD) * 60 - decM) * 60;
 
   return (
-    <div className="absolute bottom-10 right-4 max-w-sm z-20">
+    <div className="absolute bottom-10 left-4 right-4 sm:left-auto max-w-[calc(100vw-2rem)] sm:max-w-sm z-20">
       <div className="bg-panel-bg/95 backdrop-blur-md rounded-xl border border-panel-border shadow-2xl p-4">
         <div className="flex items-start justify-between mb-3">
           <div>
@@ -246,7 +246,7 @@ function ManualTargetDetail({ ra, dec, onClose }: {
   const decS = ((absDec - decD) * 60 - decM) * 60;
 
   return (
-    <div className="absolute bottom-10 right-4 max-w-sm z-20">
+    <div className="absolute bottom-10 left-4 right-4 sm:left-auto max-w-[calc(100vw-2rem)] sm:max-w-sm z-20">
       <div className="bg-panel-bg/95 backdrop-blur-md rounded-xl border border-panel-border shadow-2xl p-4">
         <div className="flex items-start justify-between mb-3">
           <div>
@@ -337,7 +337,7 @@ function BodyDetail({ body, onClose }: { body: SolarBody; onClose: () => void })
       : `${body.distanceAU.toFixed(3)} AU`;
 
   return (
-    <div className="absolute bottom-10 right-4 max-w-sm z-20">
+    <div className="absolute bottom-10 left-4 right-4 sm:left-auto max-w-[calc(100vw-2rem)] sm:max-w-sm z-20">
       <div className="bg-panel-bg/95 backdrop-blur-md rounded-xl border border-panel-border shadow-2xl p-4">
         <div className="flex items-start justify-between mb-3">
           <div>

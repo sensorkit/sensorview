@@ -23,6 +23,11 @@ interface Props {
   onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDrop?: (e: React.DragEvent<HTMLDivElement>) => void;
+  /** Touch fallback for reordering — HTML5 dnd doesn't fire from touch, so
+   *  coarse pointers get explicit move buttons instead. Undefined at the
+   *  ends of the grid. */
+  onMoveLeft?: () => void;
+  onMoveRight?: () => void;
 }
 
 /** Protocols that go through MediaMTX and therefore support a WebRTC mode. */
@@ -47,6 +52,8 @@ export function StreamTile({
   onDragStart,
   onDragOver,
   onDrop,
+  onMoveLeft,
+  onMoveRight,
 }: Props) {
   const [paused, setPaused] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
@@ -84,7 +91,7 @@ export function StreamTile({
                 : "Standard latency (HLS) — click to switch to WebRTC"
             }
             className={
-              "px-1.5 py-0.5 text-[9px] uppercase tracking-wide rounded border transition-colors " +
+              "px-1.5 py-0.5 pointer-coarse:px-2 pointer-coarse:py-1 pointer-coarse:min-h-9 text-[9px] uppercase tracking-wide rounded border transition-colors " +
               (lowLatencyOn
                 ? "bg-orange-300/15 text-orange-200 border-orange-300/60"
                 : "bg-white/5 text-text-dim border-panel-border hover:bg-white/10 hover:text-text-bright")
@@ -93,7 +100,17 @@ export function StreamTile({
             {lowLatencyOn ? "LL" : "HLS"}
           </button>
         )}
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1 pointer-coarse:gap-2">
+          {(onMoveLeft || onMoveRight) && (
+            <span className="hidden pointer-coarse:flex items-center gap-2">
+              {onMoveLeft && (
+                <IconButton label="Move left" onClick={onMoveLeft}>←</IconButton>
+              )}
+              {onMoveRight && (
+                <IconButton label="Move right" onClick={onMoveRight}>→</IconButton>
+              )}
+            </span>
+          )}
           <IconButton
             label={paused ? "Play" : "Pause"}
             onClick={() => setPaused((p) => !p)}
@@ -582,7 +599,7 @@ function IconButton({
       title={label}
       onClick={onClick}
       className={
-        "w-6 h-6 inline-flex items-center justify-center rounded text-xs " +
+        "w-6 h-6 pointer-coarse:w-10 pointer-coarse:h-10 inline-flex items-center justify-center rounded text-xs " +
         (danger
           ? "text-red-300 hover:bg-red-500/15"
           : "text-text-dim hover:bg-white/10 hover:text-text-bright")

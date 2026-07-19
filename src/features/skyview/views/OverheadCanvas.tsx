@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useMemo } from "react";
 import { createOverheadProjection } from "../projection";
+import { createPinchTracker } from "./pinchZoom";
 import { project3D, makeObserver3D, overheadScale } from "../projection3d";
 import { renderOverheadGrid } from "../layers/OverheadGridLayer";
 import { renderOverheadSatellites } from "../layers/OverheadSatelliteLayer";
@@ -118,6 +119,14 @@ export function OverheadCanvas({ size, observer, positions, landGeoJSON, clipAng
       setOverheadZoom(next);
     };
 
+    // touch-none suppresses native pinch, so two-finger zoom is ours to run.
+    const pinch = createPinchTracker({
+      getZoom: () => liveRef.current.overheadZoom,
+      setZoom: setOverheadZoom,
+      min: 0.08,
+      max: 20,
+    });
+
     let startX = 0, startY = 0;
     let startCenterLon = 0, startCenterLat = 0;
     let dragging = false;
@@ -126,6 +135,13 @@ export function OverheadCanvas({ size, observer, positions, landGeoJSON, clipAng
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      pinch.down(e);
+      if (pinch.pinching) {
+        // Second finger: the gesture is a pinch — cancel the in-flight pan.
+        dragging = false;
+        didDrag = false;
+        return;
+      }
       startX = e.clientX;
       startY = e.clientY;
       startCenterLon = liveRef.current.centerLon;
@@ -137,6 +153,7 @@ export function OverheadCanvas({ size, observer, positions, landGeoJSON, clipAng
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      if (pinch.move(e)) return;
       const rect = container.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -171,6 +188,12 @@ export function OverheadCanvas({ size, observer, positions, landGeoJSON, clipAng
       if (pointerId != null) {
         try { container.releasePointerCapture(pointerId); } catch { /* ignore */ }
         pointerId = null;
+      }
+      if (pinch.up(e)) {
+        // This pointer was part of a pinch — never a click.
+        dragging = false;
+        didDrag = false;
+        return;
       }
       const wasDragging = didDrag;
       dragging = false;

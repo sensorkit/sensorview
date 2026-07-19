@@ -50,18 +50,20 @@ export function FullscreenView({
         <button
           type="button"
           onClick={onClose}
-          className="ml-auto text-text-dim hover:text-text-bright text-xl leading-none px-2"
+          className="ml-auto inline-flex items-center justify-center text-text-dim hover:text-text-bright text-xl leading-none px-2 pointer-coarse:min-w-11 pointer-coarse:min-h-11"
           title="Close (Esc)"
         >
           ×
         </button>
       </div>
 
-      <div
-        className="flex-1 flex items-center justify-center relative"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="w-full h-full max-w-[95vw] max-h-[90vh] flex items-center justify-center">
+      {/* Propagation stops on the player box, not this wrapper, so taps on
+          the uncovered area around it reach the backdrop close handler. */}
+      <div className="flex-1 flex items-center justify-center relative">
+        <div
+          className="w-full h-full max-w-[95vw] max-h-[90dvh] flex items-center justify-center"
+          onClick={(e) => e.stopPropagation()}
+        >
           <StreamPlayer
             source={source}
             paused={false}

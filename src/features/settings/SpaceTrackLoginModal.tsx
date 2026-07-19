@@ -61,7 +61,7 @@ export function SpaceTrackLoginModal({ open, onClose, onSuccess }: Props) {
           <button
             type="button"
             onClick={onClose}
-            className="text-text-dim hover:text-text-bright text-base"
+            className="relative p-2 -m-2 text-text-dim hover:text-text-bright text-base"
             aria-label="Close"
           >
             ×

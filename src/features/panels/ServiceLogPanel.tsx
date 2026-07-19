@@ -121,7 +121,7 @@ export function ServiceLogPanel() {
           onClick={refresh}
           title="Refresh service list"
           aria-label="Refresh service list"
-          className="shrink-0 px-1 text-text-dim hover:text-text-bright text-xs cursor-pointer"
+          className="shrink-0 px-1 pointer-coarse:px-2.5 pointer-coarse:py-1.5 text-text-dim hover:text-text-bright text-xs cursor-pointer"
         >
           ⟳
         </button>
@@ -137,13 +137,13 @@ export function ServiceLogPanel() {
             </option>
           ))}
         </select>
-        <div className="shrink-0 flex items-center gap-1 text-text-dim">
+        <div className="shrink-0 flex items-center gap-1 pointer-coarse:gap-2 text-text-dim">
           <button
             onClick={() => setFontSize(Math.max(FONT_MIN, fontSize - 1))}
             disabled={fontSize <= FONT_MIN}
             title="Smaller text"
             aria-label="Smaller log text"
-            className="px-1 hover:text-text-bright text-xs cursor-pointer disabled:opacity-30 disabled:cursor-default"
+            className="px-1 pointer-coarse:px-2.5 pointer-coarse:py-1.5 hover:text-text-bright text-xs cursor-pointer disabled:opacity-30 disabled:cursor-default"
           >
             A−
           </button>
@@ -152,7 +152,7 @@ export function ServiceLogPanel() {
             disabled={fontSize >= FONT_MAX}
             title="Larger text"
             aria-label="Larger log text"
-            className="px-1 hover:text-text-bright text-[15px] leading-none cursor-pointer disabled:opacity-30 disabled:cursor-default"
+            className="px-1 pointer-coarse:px-2.5 pointer-coarse:py-1.5 hover:text-text-bright text-[15px] leading-none cursor-pointer disabled:opacity-30 disabled:cursor-default"
           >
             A+
           </button>
@@ -161,7 +161,7 @@ export function ServiceLogPanel() {
             aria-pressed={!wrap}
             title={wrap ? "Disable word wrap" : "Enable word wrap"}
             aria-label="Toggle word wrap"
-            className={`px-1 text-xs cursor-pointer hover:text-text-bright ${wrap ? "" : "text-brass"}`}
+            className={`px-1 pointer-coarse:px-2.5 pointer-coarse:py-1.5 text-xs cursor-pointer hover:text-text-bright ${wrap ? "" : "text-brass"}`}
           >
             {wrap ? "⤶" : "↔"}
           </button>

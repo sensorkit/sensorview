@@ -762,10 +762,8 @@ function StarFilterPanel({
                 key={t}
                 type="button"
                 onClick={() => toggleType(t)}
-                className="mono"
+                className="mono w-[18px] h-[18px] pointer-coarse:w-9 pointer-coarse:h-9"
                 style={{
-                  width: 18,
-                  height: 18,
                   fontSize: 10,
                   fontWeight: active ? 700 : 400,
                   background: active
@@ -1956,6 +1954,7 @@ function DetailFrame({
           type="button"
           onClick={onClose}
           aria-label="Close selection"
+          className="p-2 -m-2"
           style={{
             background: "transparent",
             color: "var(--color-paper-dim)",
@@ -2097,6 +2096,7 @@ function FilterToggleButton({
       onClick={onClick}
       aria-pressed={open}
       title={open ? "Hide filters" : "Show filters"}
+      className="before:absolute before:-inset-2.5 before:content-['']"
       style={{
         display: "inline-flex",
         alignItems: "center",

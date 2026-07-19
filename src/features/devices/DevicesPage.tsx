@@ -180,7 +180,7 @@ function ControllerCard({
   const busy = status.phase === "pending";
 
   return (
-    <div className="bg-panel-bg/60 border border-panel-border rounded-lg p-3 flex flex-col gap-2">
+    <div className="@container bg-panel-bg/60 border border-panel-border rounded-lg p-3 flex flex-col gap-2">
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -302,13 +302,13 @@ function InitConfirmModal({
         <div className="flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="py-1 px-3 rounded text-[11px] font-medium border bg-black/40 text-text-bright border-panel-border hover:bg-black/60"
+            className="py-1 px-3 pointer-coarse:py-2 rounded text-[11px] font-medium border bg-black/40 text-text-bright border-panel-border hover:bg-black/60"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="py-1 px-3 rounded text-[11px] font-medium border bg-accent/30 text-text-bright border-accent/50 hover:bg-accent/50"
+            className="py-1 px-3 pointer-coarse:py-2 rounded text-[11px] font-medium border bg-accent/30 text-text-bright border-accent/50 hover:bg-accent/50"
           >
             Continue
           </button>
@@ -343,7 +343,7 @@ function ControllerDeviceChips({ instrument }: { instrument: Instrument }) {
           className="text-[10px] bg-white/5 text-text-dim border border-panel-border rounded px-1.5 py-0.5"
         >
           <span className="uppercase tracking-wide">{c.role}</span>
-          <span className="text-text-bright font-mono ml-1">{c.id}</span>
+          <span className="text-text-bright font-mono ml-1 break-all">{c.id}</span>
         </span>
       ))}
     </div>
@@ -366,7 +366,7 @@ function ControlBtn({
       disabled={disabled}
       onClick={onClick}
       title={tooltip}
-      className={`shrink-0 py-1 px-2.5 rounded text-[11px] font-medium border transition-colors ${
+      className={`shrink-0 py-1 px-2.5 pointer-coarse:py-2 pointer-coarse:px-3 rounded text-[11px] font-medium border transition-colors ${
         disabled
           ? "bg-black/20 text-text-dim border-panel-border opacity-50 cursor-not-allowed"
           : "bg-black/40 text-text-bright border-panel-border hover:bg-black/60 hover:border-text-dim"
@@ -408,7 +408,7 @@ function DeviceCard({
     )?.enabled ?? null;
 
   return (
-    <div className="bg-panel-bg/60 border border-panel-border rounded-lg p-3 flex flex-col gap-2">
+    <div className="@container bg-panel-bg/60 border border-panel-border rounded-lg p-3 flex flex-col gap-2">
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -865,7 +865,7 @@ function PositionChangeControl({
       {/* Two-column grid mirrors the Metrics layout above so the input's right
           edge aligns with the Position value's right edge (column 1 boundary).
           Change button sits at the left edge; col 2 is intentionally empty. */}
-      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+      <div className="grid grid-cols-1 @[360px]:grid-cols-2 gap-x-3 gap-y-1">
         <div className="flex items-center justify-between gap-2">
           <ControlBtn
             label="Change"
@@ -885,7 +885,7 @@ function PositionChangeControl({
               placeholder={
                 currentPosition != null ? currentPosition.toFixed(precision) : "position"
               }
-              className="bg-black/40 border border-panel-border rounded text-text-bright text-[11px] font-mono px-2 py-1 w-24 text-right placeholder:text-text-dim disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-text-dim"
+              className="bg-black/40 border border-panel-border rounded text-text-bright text-[11px] pointer-coarse:text-base pointer-coarse:py-2 font-mono px-2 py-1 w-24 text-right placeholder:text-text-dim disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-text-dim"
             />
             {unitSuffix && (
               <span className="text-text-dim text-[11px] font-mono">{unitSuffix}</span>
@@ -1006,7 +1006,7 @@ function FilterChangerBody({
               disabled={!canClick}
               onClick={() => select(f)}
               title={tooltip}
-              className={`px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
+              className={`px-1.5 py-0.5 pointer-coarse:px-2.5 pointer-coarse:py-1.5 pointer-coarse:min-h-9 pointer-coarse:min-w-9 rounded text-[10px] border transition-colors ${
                 active
                   ? "bg-blue-500/30 text-blue-200 border-blue-500/40 cursor-default"
                   : canClick
@@ -1019,6 +1019,15 @@ function FilterChangerBody({
           );
         })}
       </div>
+      {/* The per-button title tooltip never fires on touch — spell out why the
+          filter buttons are disabled so the row doesn't read as dead. */}
+      {(!directControl || !canSetFilter) && (
+        <div className="text-[10px] text-text-dim">
+          {!directControl
+            ? "Enable Direct Device Control in Settings to change filters"
+            : "Device does not support SetFilter"}
+        </div>
+      )}
       {status.phase !== "idle" && (
         <div
           className={`text-[10px] font-mono ${
@@ -1166,7 +1175,7 @@ function GenericBody({ state }: { state: Record<string, unknown> }) {
 // === Small presentational bits ===
 
 function Metrics({ children }: { children: React.ReactNode }) {
-  return <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">{children}</div>;
+  return <div className="grid grid-cols-1 @[360px]:grid-cols-2 gap-x-3 gap-y-1 text-xs">{children}</div>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

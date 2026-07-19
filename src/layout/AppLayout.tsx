@@ -34,20 +34,20 @@ export function AppLayout() {
   }, [syncDetached, setDetached]);
 
   return (
-    <div className="w-full h-screen flex flex-col bg-sky-ink">
+    <div className="w-full h-dvh flex flex-col bg-sky-ink">
       {/* Top bar — V4 "Atlas Observatory" (paper) */}
       <nav
-        className="flex items-center h-[46px] bg-paper px-5 shrink-0 gap-1"
+        className="flex items-center h-[46px] bg-paper px-3 md:px-5 shrink-0 gap-1"
         style={{ borderBottom: "1px solid var(--color-brass)" }}
       >
         <img
           src={`${import.meta.env.BASE_URL}logos/sensorkit-horizontal.svg`}
           alt="SensorKit"
-          className="mr-6 h-[26px] w-auto select-none"
+          className="mr-6 h-[26px] w-auto select-none max-md:hidden"
           draggable={false}
         />
         <TabStrip />
-        <div className="ml-auto flex items-center gap-[14px]">
+        <div className="ml-auto shrink-0 pl-2 flex items-center gap-2.5 md:gap-[14px]">
           <AgentControlMenu connection={connection} />
           <UtcClock />
           <LstReadout lon={observer.lon} />
@@ -55,8 +55,9 @@ export function AppLayout() {
       </nav>
 
       {/* Active tab content + right-edge dock share a row so the dock reserves
-          space instead of overlaying page content (no more covering the catalog). */}
-      <div className="flex-1 min-h-0 flex">
+          space instead of overlaying page content (no more covering the catalog).
+          Below lg the dock overlays instead (see RightDock), hence `relative`. */}
+      <div className="flex-1 min-h-0 flex relative">
         <div className="flex-1 min-w-0 min-h-0">
           <Outlet />
         </div>
@@ -156,7 +157,10 @@ function TabStrip() {
   };
 
   const onTabPointerDown = (e: ReactPointerEvent, tab: TabDef) => {
-    if (e.button !== 0 || dragRef.current) return;
+    // Mouse-only: on touch the strip scrolls natively and a tap must always
+    // navigate — starting a drag here would fight the scroll gesture (the
+    // browser wins via pointercancel) and swallow taps as aborted drags.
+    if (e.button !== 0 || dragRef.current || e.pointerType !== "mouse") return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     dragRef.current = {
       id: tab.id,
@@ -233,7 +237,7 @@ function TabStrip() {
   return (
     <div
       ref={stripRef}
-      className="relative flex items-center gap-1 h-full"
+      className="relative flex items-center gap-1 h-full min-w-0 flex-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       onPointerMove={onStripPointerMove}
       onPointerUp={(e) => finishDrag(e, true)}
       onPointerCancel={(e) => finishDrag(e, false)}
@@ -251,7 +255,7 @@ function TabStrip() {
           <div
             key={tab.id}
             data-tabid={tab.id}
-            className="relative flex group"
+            className="relative flex group shrink-0"
             style={
               isDragging
                 ? {
@@ -318,7 +322,7 @@ function TabStrip() {
               }}
               title={isOut ? "Focus window" : "Open in its own window"}
               aria-label={isOut ? `Focus ${tab.label} window` : `Pop out ${tab.label}`}
-              className={`absolute top-1/2 -translate-y-1/2 right-[3px] flex items-center justify-center w-4 h-4 rounded text-[11px] leading-none cursor-pointer transition-opacity hover:text-ink ${
+              className={`pointer-coarse:hidden absolute top-1/2 -translate-y-1/2 right-[3px] flex items-center justify-center w-4 h-4 rounded text-[11px] leading-none cursor-pointer transition-opacity hover:text-ink ${
                 isOut
                   ? "text-brass opacity-100"
                   : "text-paper-dim opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
@@ -414,7 +418,7 @@ function AgentControlMenu({ connection }: { connection: string }) {
     <div ref={rootRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 rounded-full px-[9px] py-[3px] text-[10px] cursor-pointer hover:brightness-110"
+        className="inline-flex items-center gap-1.5 rounded-full px-[9px] py-[3px] pointer-coarse:px-3 pointer-coarse:py-1.5 text-[10px] cursor-pointer hover:brightness-110"
         style={{
           color,
           border: `1px solid ${color}77`,
@@ -437,7 +441,7 @@ function AgentControlMenu({ connection }: { connection: string }) {
           {showEnable && (
             <button
               onClick={() => pickAction("enable")}
-              className="block w-full text-left px-3 py-1.5 text-text-bright hover:bg-white/5"
+              className="block w-full text-left px-3 py-1.5 pointer-coarse:py-3 text-text-bright hover:bg-white/5"
             >
               Enable
             </button>
@@ -445,7 +449,7 @@ function AgentControlMenu({ connection }: { connection: string }) {
           {showDisable && (
             <button
               onClick={() => pickAction("disable")}
-              className="block w-full text-left px-3 py-1.5 text-text-bright hover:bg-white/5"
+              className="block w-full text-left px-3 py-1.5 pointer-coarse:py-3 text-text-bright hover:bg-white/5"
             >
               Disable
             </button>
@@ -541,9 +545,13 @@ function UtcClock() {
   const hundredths = String(Math.floor(now.getUTCMilliseconds() / 10)).padStart(2, "0");
 
   return (
-    <span className="mono text-[12px] text-ink">
-      {hh}:{mm}:{ss}
-      <span className="text-paper-dim">.{hundredths}</span>Z
+    <span className="mono text-[12px] text-ink whitespace-nowrap">
+      {hh}:{mm}
+      <span className="hidden sm:inline">
+        :{ss}
+        <span className="text-paper-dim">.{hundredths}</span>
+      </span>
+      Z
     </span>
   );
 }
@@ -562,7 +570,7 @@ function LstReadout({ lon }: { lon: number }) {
   const m = Math.floor((hours - h) * 60);
   void tick;
   return (
-    <span className="mono text-[11px] text-brass">
+    <span className="mono text-[11px] text-brass whitespace-nowrap hidden md:inline">
       LST {String(h).padStart(2, "0")}:{String(m).padStart(2, "0")}
     </span>
   );

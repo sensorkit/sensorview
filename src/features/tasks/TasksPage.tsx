@@ -188,8 +188,10 @@ export function AgentCard({ state }: { state: AgentState }) {
       {ctrlEntries.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
           {ctrlEntries.map(([id, cs]) => (
-            <div key={id} className="flex items-center gap-2 font-mono">
-              <span className="text-text-bright">{id}</span>
+            <div key={id} className="flex items-center gap-2 font-mono min-w-0">
+              <span className="text-text-bright truncate" title={id}>
+                {id}
+              </span>
               <span className="text-text-dim">
                 {cs.control_enabled ? "enabled" : "disabled"} · elected{" "}
                 {cs.elected_state ? "yes" : "no"}
@@ -373,7 +375,7 @@ function ProgramCard({
             {controller ?? ""}
           </div>
         </div>
-        <div className="flex flex-col items-end gap-1">
+        <div className="flex flex-col items-end gap-1 pointer-coarse:gap-2">
           <TogglePill
             label={enabled ? "enabled" : "disabled"}
             tone={enabled ? "good" : "off"}
@@ -712,7 +714,7 @@ function TogglePill({
       disabled={disabled}
       onClick={onClick}
       title={tooltip}
-      className={`px-1.5 py-0.5 text-[9px] uppercase tracking-wide rounded border transition-colors ${cls} ${
+      className={`px-1.5 py-0.5 pointer-coarse:px-2.5 pointer-coarse:py-2 text-[9px] uppercase tracking-wide rounded border transition-colors ${cls} ${
         disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
       }`}
     >

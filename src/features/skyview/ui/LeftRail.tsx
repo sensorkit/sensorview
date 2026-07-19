@@ -14,8 +14,11 @@ const REGIMES: ("LEO" | "MEO" | "GEO" | "HEO")[] = ["LEO", "MEO", "GEO", "HEO"];
  * V4 "Atlas Observatory" left rail. 68 px wide column with view-mode icons
  * at the top and orbit-regime chips below. Reads and writes the same stores
  * as FilterControls, so the two stay in sync during phased migration.
+ *
+ * With `horizontal` (the compact layout's top bar) the same controls run in a
+ * scrollable row instead — sized up slightly since that layout implies touch.
  */
-export function LeftRail() {
+export function LeftRail({ horizontal = false }: { horizontal?: boolean }) {
   const viewMode = useSkyViewStore((s) => s.viewMode);
   const setViewMode = useSkyViewStore((s) => s.setViewMode);
 
@@ -23,7 +26,13 @@ export function LeftRail() {
   const updateFilter = useSatelliteStore((s) => s.updateFilter);
 
   return (
-    <div className="h-full w-full flex flex-col items-center pt-3.5 gap-1.5">
+    <div
+      className={
+        horizontal
+          ? "w-full flex items-center px-2 py-1.5 gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          : "h-full w-full flex flex-col items-center pt-3.5 gap-1.5"
+      }
+    >
       {VIEW_MODES.map((v) => {
         const active = viewMode === v.mode;
         return (
@@ -33,10 +42,10 @@ export function LeftRail() {
             onClick={() => setViewMode(v.mode)}
             title={v.title}
             aria-pressed={active}
-            className="flex flex-col items-center justify-center rounded-sm transition-colors"
+            className="flex flex-col items-center justify-center rounded-sm transition-colors shrink-0"
             style={{
-              width: 48,
-              height: 48,
+              width: horizontal ? 44 : 48,
+              height: horizontal ? 40 : 48,
               color: active ? "var(--color-brass)" : "var(--color-paper-dim)",
               background: active ? "rgba(184,138,63,0.13)" : "transparent",
               border: active
@@ -44,7 +53,7 @@ export function LeftRail() {
                 : "1px solid transparent",
             }}
           >
-            <span style={{ fontSize: 18, lineHeight: 1 }}>{v.glyph}</span>
+            <span style={{ fontSize: horizontal ? 15 : 18, lineHeight: 1 }}>{v.glyph}</span>
             <span style={{ fontSize: 9, letterSpacing: 0.5, marginTop: 3 }}>
               {v.label}
             </span>
@@ -53,17 +62,31 @@ export function LeftRail() {
       })}
 
       <div
-        style={{
-          width: 34,
-          height: 1,
-          background: "rgba(184,138,63,0.28)",
-          margin: "8px 0",
-        }}
+        className="shrink-0"
+        style={
+          horizontal
+            ? {
+                width: 1,
+                height: 30,
+                background: "rgba(184,138,63,0.28)",
+                margin: "0 6px",
+              }
+            : {
+                width: 34,
+                height: 1,
+                background: "rgba(184,138,63,0.28)",
+                margin: "8px 0",
+              }
+        }
       />
 
       <div
-        className="font-semibold uppercase text-brass"
-        style={{ fontSize: 9, letterSpacing: 1.5, marginBottom: 2 }}
+        className="font-semibold uppercase text-brass shrink-0 whitespace-nowrap"
+        style={{
+          fontSize: 9,
+          letterSpacing: 1.5,
+          ...(horizontal ? { marginRight: 2 } : { marginBottom: 2 }),
+        }}
       >
         Orbits
       </div>
@@ -83,10 +106,10 @@ export function LeftRail() {
             }}
             title={`Toggle ${regime} satellites`}
             aria-pressed={active}
-            className="flex items-center justify-center gap-1.5 rounded-[3px]"
+            className="flex items-center justify-center gap-1.5 rounded-[3px] shrink-0"
             style={{
-              width: 48,
-              height: 30,
+              width: horizontal ? 52 : 48,
+              height: horizontal ? 36 : 30,
               color: active ? color : "var(--color-paper-dim)",
               background: active ? `${color}18` : "transparent",
               border: active

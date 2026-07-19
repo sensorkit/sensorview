@@ -7,7 +7,7 @@ import { AtlasContainer } from "./AtlasContainer";
  */
 export function SkyviewPopout() {
   return (
-    <div className="w-screen h-screen bg-black">
+    <div className="w-full h-dvh bg-black">
       <AtlasContainer />
     </div>
   );

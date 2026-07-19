@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useMemo } from "react";
 import { createGroundTrackProjection, geoToScreen } from "../projection";
+import { createPinchTracker } from "./pinchZoom";
 import { renderGroundTrackMap } from "../layers/GroundTrackMapLayer";
 import { renderGroundTrackSatellites } from "../layers/GroundTrackSatelliteLayer";
 import { renderMountReticlesGroundTrack } from "../layers/MountReticleLayer";
@@ -118,8 +119,23 @@ export function GroundTrackCanvas({ size, observer, positions, landGeoJSON, disa
       setGroundTrackZoom(next);
     };
 
+    // touch-none suppresses native pinch, so two-finger zoom is ours to run.
+    const pinch = createPinchTracker({
+      getZoom: () => liveRef.current.groundTrackZoom,
+      setZoom: setGroundTrackZoom,
+      min: 0.5,
+      max: 20,
+    });
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      pinch.down(e);
+      if (pinch.pinching) {
+        // Second finger: the gesture is a pinch — cancel the in-flight pan.
+        dragging = false;
+        didDrag = false;
+        return;
+      }
       dragging = true;
       didDrag = false;
       startX = e.clientX;
@@ -131,6 +147,7 @@ export function GroundTrackCanvas({ size, observer, positions, landGeoJSON, disa
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      if (pinch.move(e)) return;
       const rect = container.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -161,6 +178,12 @@ export function GroundTrackCanvas({ size, observer, positions, landGeoJSON, disa
     };
 
     const onPointerUp = (e: PointerEvent) => {
+      if (pinch.up(e)) {
+        // This pointer was part of a pinch — never a click.
+        dragging = false;
+        didDrag = false;
+        return;
+      }
       const wasDrag = didDrag;
       dragging = false;
       didDrag = false;

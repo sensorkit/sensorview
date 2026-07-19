@@ -93,31 +93,31 @@ function PresetRow({
         isDefault ? "border-blue-500/40 bg-blue-500/5" : "border-panel-border bg-black/30"
       }`}
     >
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-sm text-text-bright font-semibold">{preset.name}</span>
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        <span className="min-w-0 truncate text-sm text-text-bright font-semibold">{preset.name}</span>
         {isDefault && (
           <span className="px-1.5 py-0.5 text-[9px] uppercase tracking-wide rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
             default
           </span>
         )}
-        <div className="ml-auto flex gap-1">
+        <div className="ml-auto flex gap-1 pointer-coarse:gap-2">
           {!isDefault && (
             <button
               onClick={onSetDefault}
-              className="px-2 py-0.5 text-[10px] rounded border border-panel-border bg-white/5 hover:bg-white/10 text-text-dim"
+              className="px-2 py-0.5 pointer-coarse:px-2.5 pointer-coarse:py-1.5 text-[10px] rounded border border-panel-border bg-white/5 hover:bg-white/10 text-text-dim"
             >
               Set default
             </button>
           )}
           <button
             onClick={isEditing ? onDoneEditing : onEdit}
-            className="px-2 py-0.5 text-[10px] rounded border border-panel-border bg-white/5 hover:bg-white/10 text-text-bright"
+            className="px-2 py-0.5 pointer-coarse:px-2.5 pointer-coarse:py-1.5 text-[10px] rounded border border-panel-border bg-white/5 hover:bg-white/10 text-text-bright"
           >
             {isEditing ? "Done" : "Edit"}
           </button>
           <button
             onClick={onDelete}
-            className="px-2 py-0.5 text-[10px] rounded border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-300"
+            className="px-2 py-0.5 pointer-coarse:px-2.5 pointer-coarse:py-1.5 text-[10px] rounded border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-300"
           >
             Delete
           </button>

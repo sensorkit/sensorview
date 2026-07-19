@@ -40,44 +40,57 @@ export function RightDock() {
     max: IMG_MAX,
   });
 
+  // The persisted width is trusted on desktop but clamped to the viewport at
+  // render time: a 600px dock saved on a desktop session must not swallow a
+  // 375px phone (28px stays clear so the arrow tabs remain reachable).
+  const effWidth = `min(${dockWidth}px, calc(100vw - 28px))`;
+
   // Tab vertical positions. When both panels are open, center each tab on its
   // panel's region so they straddle (and track) the divider as it's dragged.
   // Otherwise keep them as a tidy pair at the dock center — pushing a collapsed
   // panel's tab to the far top/bottom edge looked detached.
-  const dockCenter = `calc((${DOCK_TOP}px + 100vh) / 2)`;
+  const dockCenter = `calc((${DOCK_TOP}px + 100dvh) / 2)`;
   const imageTabTop =
     imageOpen && logOpen
       ? `calc(${DOCK_TOP}px + ${imageHeight / 2}px)` // center of image region
       : `calc(${dockCenter} - 31px)`; // upper of the centered pair
   const logTabTop =
     imageOpen && logOpen
-      ? `calc((${DOCK_TOP + imageHeight}px + 100vh) / 2)` // center of log region
+      ? `calc((${DOCK_TOP + imageHeight}px + 100dvh) / 2)` // center of log region
       : `calc(${dockCenter} + 31px)`; // lower of the centered pair
-  const tabRight = anyOpen ? dockWidth : 0;
+  const tabRight = anyOpen ? effWidth : "0px";
 
   return (
     <>
-      {/* Inline dock column — reserves layout width when open. */}
+      {/* Inline dock column — reserves layout width when open at lg+. Below lg
+          there isn't room to give away, so it overlays the page instead (the
+          content row in AppLayout is `relative` for exactly this). */}
       <div
-        className="relative shrink-0 overflow-hidden transition-[width] duration-200 ease-out"
-        style={{ width: anyOpen ? dockWidth : 0 }}
+        className="relative shrink-0 overflow-hidden transition-[width] duration-200 ease-out max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-40"
+        style={{ width: anyOpen ? effWidth : 0 }}
         aria-hidden={!anyOpen}
       >
         <div
           className="absolute inset-y-0 right-0 flex flex-col bg-panel-bg/95 backdrop-blur-md border-l border-panel-border shadow-2xl"
-          style={{ width: dockWidth }}
+          style={{ width: effWidth }}
         >
           {/* Width grip */}
           <div
             onPointerDown={widthGrip}
-            className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-brass/40 z-10"
+            className="absolute left-0 top-0 bottom-0 w-1.5 pointer-coarse:w-4 touch-none cursor-ew-resize hover:bg-brass/40 z-10"
             title="Resize"
           />
 
           {imageOpen && (
             <div
               className="flex flex-col min-h-0"
-              style={logOpen ? { height: imageHeight, flexShrink: 0 } : { flex: "1 1 0%" }}
+              style={
+                logOpen
+                  ? // Cap against the viewport so a tall persisted height can't
+                    // push the divider and log pane off a short screen.
+                    { height: imageHeight, flexShrink: 0, maxHeight: "60dvh" }
+                  : { flex: "1 1 0%" }
+              }
             >
               <LatestImagePanel />
             </div>
@@ -86,7 +99,7 @@ export function RightDock() {
           {imageOpen && logOpen && (
             <div
               onPointerDown={heightGrip}
-              className="shrink-0 h-1.5 cursor-ns-resize hover:bg-brass/40 border-y border-panel-border"
+              className="shrink-0 h-1.5 pointer-coarse:h-4 touch-none cursor-ns-resize hover:bg-brass/40 border-y border-panel-border"
               title="Resize"
             />
           )}
@@ -118,7 +131,7 @@ function ArrowTab({
   open: boolean;
   onClick: () => void;
   label: string;
-  right: number;
+  right: string;
   top: string;
 }) {
   return (
@@ -127,7 +140,7 @@ function ArrowTab({
       style={{ right, top }}
       title={open ? `Hide ${label}` : `Show ${label}`}
       aria-label={open ? `Hide ${label}` : `Show ${label}`}
-      className="fixed z-40 -translate-y-1/2 flex items-center justify-center w-5 h-14 rounded-l-lg bg-panel-bg/40 border border-r-0 border-panel-border text-text-dim hover:text-text-bright hover:bg-panel-bg/80 cursor-pointer select-none text-xs shadow-[-3px_0_10px_rgba(0,0,0,0.4)] transition-[right,background-color] duration-200 ease-out"
+      className="fixed z-40 -translate-y-1/2 flex items-center justify-center w-5 h-14 rounded-l-lg bg-panel-bg/40 border border-r-0 border-panel-border text-text-dim hover:text-text-bright hover:bg-panel-bg/80 cursor-pointer select-none text-xs shadow-[-3px_0_10px_rgba(0,0,0,0.4)] transition-[right,background-color] duration-200 ease-out before:absolute before:-inset-y-2 before:-left-3 before:right-0 before:content-['']"
     >
       {open ? "→" : "←"}
     </button>

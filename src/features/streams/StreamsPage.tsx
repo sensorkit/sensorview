@@ -9,12 +9,6 @@ import { AddStreamModal } from "./AddStreamModal";
 import { FullscreenView } from "./FullscreenView";
 import { StreamTile } from "./StreamTile";
 
-const COLUMNS: Record<StreamLayout, number> = {
-  "1col": 1,
-  "2col": 2,
-  "3col": 3,
-};
-
 export function StreamsPage() {
   const sources = useStreamsStore((s) => s.sources);
   const layout = useStreamsStore((s) => s.layout);
@@ -62,7 +56,7 @@ export function StreamsPage() {
           <button
             type="button"
             onClick={openAdd}
-            className="px-3 py-1 text-[11px] uppercase tracking-wide rounded border border-orange-300/60 bg-orange-300/15 text-orange-200 hover:bg-orange-300/25"
+            className="px-3 py-1 pointer-coarse:py-2 text-[11px] uppercase tracking-wide rounded border border-orange-300/60 bg-orange-300/15 text-orange-200 hover:bg-orange-300/25"
           >
             + Add stream
           </button>
@@ -75,12 +69,15 @@ export function StreamsPage() {
           </div>
         ) : (
           <div
-            className="grid gap-3"
-            style={{
-              gridTemplateColumns: `repeat(${COLUMNS[layout]}, minmax(0, 1fr))`,
-            }}
+            // Persisted layout choice applies from sm: up; below that the
+            // tiles always stack single-column so headers aren't clipped.
+            className={
+              "grid gap-3 grid-cols-1" +
+              (layout !== "1col" ? " sm:grid-cols-2" : "") +
+              (layout === "3col" ? " lg:grid-cols-3" : "")
+            }
           >
-            {sources.map((source) => (
+            {sources.map((source, i) => (
               <StreamTile
                 key={source.id}
                 source={source}
@@ -88,6 +85,18 @@ export function StreamsPage() {
                 onRemove={() => removeStream(source)}
                 onFullscreen={() => setFullscreenId(source.id)}
                 fullscreenActive={fullscreenId === source.id}
+                // HTML5 dnd never fires from touch input; these feed the
+                // tile's coarse-pointer-only move buttons as the fallback.
+                onMoveLeft={
+                  i > 0
+                    ? () => reorderSources(source.id, sources[i - 1]!.id)
+                    : undefined
+                }
+                onMoveRight={
+                  i < sources.length - 1
+                    ? () => reorderSources(source.id, sources[i + 1]!.id)
+                    : undefined
+                }
                 draggable
                 onDragStart={(e) => {
                   dragSourceId.current = source.id;
@@ -154,7 +163,7 @@ function LayoutToggle({
               // `relative` + bumped z-index on the active button so its
               // orange right edge sits above the next sibling's dim left
               // edge (negative margins below stack later siblings on top).
-              "relative px-2 py-1 text-[11px] border " +
+              "relative px-2 py-1 pointer-coarse:px-3 pointer-coarse:py-2 text-[11px] border " +
               (active
                 ? "z-10 bg-orange-300/15 text-orange-200 border-orange-300/60"
                 : "bg-white/5 text-text-dim border-panel-border hover:bg-white/10 hover:text-text-bright") +

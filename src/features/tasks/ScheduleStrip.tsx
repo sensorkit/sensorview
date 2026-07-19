@@ -54,6 +54,21 @@ export function ScheduleStrip({
     null,
   );
 
+  // Measured strip width drives axis tick density; null until the first
+  // ResizeObserver callback, when pickStep falls back to a fixed ~6-tick
+  // target.
+  const [stripWidth, setStripWidth] = useState<number | null>(null);
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w) setStripWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const intervals = useMemo(
     () =>
       schedule.map(([s, e, w]) => ({
@@ -105,17 +120,24 @@ export function ScheduleStrip({
     setDrag({ ...drag, currentX: x });
   };
 
+  // Interval under the last tap/click, shown as a text line below the strip
+  // since the title tooltips never fire on touch.
+  const [tapped, setTapped] = useState<Interval | null>(null);
+
   const onPointerUp = (_e: React.PointerEvent<HTMLDivElement>) => {
     if (!drag) return;
     const rect = stripRef.current?.getBoundingClientRect();
     if (rect && rect.width > 0) {
       const a = Math.min(drag.startX, drag.currentX);
       const b = Math.max(drag.startX, drag.currentX);
+      const span = view.end.getTime() - view.start.getTime();
       if (b - a >= DRAG_THRESHOLD) {
-        const span = view.end.getTime() - view.start.getTime();
         const t0 = view.start.getTime() + (a / rect.width) * span;
         const t1 = view.start.getTime() + (b / rect.width) * span;
         setZoom({ kind: "custom", start: new Date(t0), end: new Date(t1) });
+      } else {
+        const t = new Date(view.start.getTime() + (a / rect.width) * span);
+        setTapped(visible.find((iv) => iv.start <= t && t < iv.end) ?? null);
       }
     }
     setDrag(null);
@@ -127,9 +149,11 @@ export function ScheduleStrip({
   const dragWidth = drag ? Math.abs(drag.currentX - drag.startX) : 0;
   const showDragRect = drag && dragWidth >= 1;
 
+  const tappedModeState = tapped ? modeStateOf(tapped.mode) : null;
+
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex items-center gap-2 pointer-coarse:gap-3 flex-wrap">
         {PRESETS.map((p) => (
           <Chip
             key={p.kind}
@@ -150,7 +174,7 @@ export function ScheduleStrip({
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
-          className="relative w-full rounded border border-panel-border overflow-hidden bg-black/40 select-none"
+          className="relative w-full rounded border border-panel-border overflow-hidden bg-black/40 select-none touch-pan-y"
           style={{ height: 32, cursor: drag ? "ew-resize" : "crosshair" }}
         >
           {/* Top band — mode tint. Default is red (down): the operator falls
@@ -241,7 +265,7 @@ export function ScheduleStrip({
 
         {/* Axis */}
         <div className="relative h-3 mt-1 text-[9px] font-mono text-text-dim">
-          {axisTicks(view).map((t, i) => (
+          {axisTicks(view, stripWidth).map((t, i) => (
             <span
               key={i}
               className="absolute -translate-x-1/2"
@@ -252,6 +276,18 @@ export function ScheduleStrip({
           ))}
         </div>
       </div>
+
+      {tapped && (
+        <div className="text-[10px] font-mono text-text-dim">
+          {tapped.programs[0] && (
+            <span className="text-text-bright">{tapped.programs[0]} · </span>
+          )}
+          {tapped.mode}
+          {tappedModeState ? ` (${tappedModeState})` : ""}
+          {" · "}
+          {fmtShort(tapped.start)} → {fmtShort(tapped.end)}
+        </div>
+      )}
 
       {programLegend.size > 0 && (
         <div className="flex items-center gap-3 flex-wrap text-[10px] text-text-dim">
@@ -358,9 +394,9 @@ function buildLegend(
   );
 }
 
-function axisTicks(w: Window): Date[] {
+function axisTicks(w: Window, stripWidth: number | null): Date[] {
   const span = w.end.getTime() - w.start.getTime();
-  const step = pickStep(span);
+  const step = pickStep(span, stripWidth);
   // Snap first tick to the next step boundary at/after start.
   const startMs = w.start.getTime();
   const first = Math.ceil(startMs / step) * step;
@@ -372,7 +408,7 @@ function axisTicks(w: Window): Date[] {
   return ticks;
 }
 
-function pickStep(spanMs: number): number {
+function pickStep(spanMs: number, stripWidth: number | null): number {
   const candidates = [
     60_000,        // 1m
     5 * 60_000,    // 5m
@@ -385,8 +421,14 @@ function pickStep(spanMs: number): number {
     12 * 3600_000,
     24 * 3600_000,
   ];
-  // Aim for ~6 ticks visible
-  const target = spanMs / 6;
+  // Aim for one label per ~55px of strip so narrow screens thin out; cap at
+  // ~6 so wide strips keep the familiar density. Fall back to ~6 ticks until
+  // the strip has been measured.
+  const tickTarget =
+    stripWidth != null
+      ? Math.min(6, Math.max(2, Math.floor(stripWidth / 55)))
+      : 6;
+  const target = spanMs / tickTarget;
   for (const c of candidates) if (c >= target) return c;
   return candidates[candidates.length - 1]!;
 }
@@ -425,8 +467,8 @@ function Chip({
       onClick={onClick}
       className={
         active
-          ? "px-2 py-0.5 text-[10px] uppercase tracking-wide rounded border border-orange-300/60 bg-orange-300/15 text-orange-200 cursor-pointer"
-          : "px-2 py-0.5 text-[10px] uppercase tracking-wide rounded border border-panel-border bg-white/5 text-text-dim hover:bg-white/10 hover:text-text-bright cursor-pointer"
+          ? "px-2 py-0.5 pointer-coarse:px-3 pointer-coarse:py-1.5 text-[10px] uppercase tracking-wide rounded border border-orange-300/60 bg-orange-300/15 text-orange-200 cursor-pointer"
+          : "px-2 py-0.5 pointer-coarse:px-3 pointer-coarse:py-1.5 text-[10px] uppercase tracking-wide rounded border border-panel-border bg-white/5 text-text-dim hover:bg-white/10 hover:text-text-bright cursor-pointer"
       }
     >
       {label}

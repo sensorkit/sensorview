@@ -40,7 +40,7 @@ export function FileBrowserPanel({ products, selected, onSelect }: Props) {
           <div key={g}>
             <button
               onClick={() => toggle(g)}
-              className="flex w-full items-center gap-1 px-2 py-1 text-left text-text-dim hover:text-text-bright"
+              className="flex w-full items-center gap-1 px-2 py-1 pointer-coarse:py-2.5 text-left text-text-dim hover:text-text-bright"
             >
               <span className="inline-block w-3 text-[8px] text-text-dim/70">
                 {isCollapsed ? "▶" : "▼"}
@@ -58,7 +58,7 @@ export function FileBrowserPanel({ products, selected, onSelect }: Props) {
                       <button
                         onClick={() => onSelect(g, f.productId)}
                         title={f.productId}
-                        className={`block w-full truncate py-0.5 pl-6 pr-2 text-left font-mono text-[11px] transition-colors ${
+                        className={`block w-full truncate py-0.5 pointer-coarse:py-2 pl-6 pr-2 text-left font-mono text-[11px] transition-colors ${
                           isSel
                             ? "bg-blue-500/20 text-blue-200"
                             : "text-text-dim hover:bg-white/5 hover:text-text-bright"

@@ -6,6 +6,7 @@ import { useResizableWidth } from "./useResizableWidth";
 import { useSensorKitStore } from "../../stores/sensorkit";
 import { fetchProductMetadata, productDataUrl } from "../../lib/sensorkit-client/products";
 import type { ProductMetadata } from "../../lib/sensorkit-client/types";
+import { useCompactLayout } from "../../lib/useMediaQuery";
 
 function ResizeHandle({ onPointerDown }: { onPointerDown: (e: React.PointerEvent) => void }) {
   return (
@@ -40,6 +41,7 @@ export function ImagesPage() {
     controllers[0]?.name ??
     null;
 
+  const compact = useCompactLayout();
   const left = useResizableWidth(240, { side: "left", min: 160, max: 560 });
   const right = useResizableWidth(280, { side: "right", min: 160, max: 600 });
 
@@ -66,17 +68,17 @@ export function ImagesPage() {
   return (
     <div className="flex h-full flex-col">
       {/* Top bar: controller picker, or connection status when offline */}
-      <div className="flex shrink-0 items-center gap-3 border-b border-panel-border px-3 py-2">
+      <div className="flex flex-wrap shrink-0 items-center gap-3 border-b border-panel-border px-3 py-2">
         {connection !== "open" ? (
           <span className="text-xs text-text-dim">Waiting for SensorKit connection…</span>
         ) : (
-          <label className="flex items-center gap-2 text-xs text-text-dim">
+          <label className="flex min-w-0 items-center gap-2 text-xs text-text-dim">
             <span className="uppercase tracking-wide">Controller</span>
             {controllers.length > 0 && (
               <select
                 value={activeControllerId ?? ""}
                 onChange={(e) => setControllerOverride(e.target.value || null)}
-                className="rounded border border-panel-border bg-panel-bg/60 px-2 py-1 text-xs text-text-bright"
+                className="max-w-[60vw] rounded border border-panel-border bg-panel-bg/60 px-2 py-1 pointer-coarse:py-2 text-xs text-text-bright"
               >
                 {controllers.map((c) => (
                   <option key={c.name} value={c.name}>
@@ -90,29 +92,46 @@ export function ImagesPage() {
         )}
       </div>
 
-      {/* Main: file browser | viewer | header */}
-      <div className="flex min-h-0 flex-1">
-        <div
-          style={{ width: left.width }}
-          className="shrink-0 overflow-y-auto border-r border-panel-border"
-        >
-          <FileBrowserPanel products={products} selected={open} onSelect={onSelectFile} />
+      {compact ? (
+        /* Compact: stack browser / viewer / header vertically — the fixed-width
+           side panes would leave the viewer 0px on a phone. */
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="max-h-40 shrink-0 overflow-y-auto border-b border-panel-border">
+            <FileBrowserPanel products={products} selected={open} onSelect={onSelectFile} />
+          </div>
+          <JS9Viewer
+            source={source}
+            className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden bg-sky-ink"
+          />
+          <div className="max-h-40 shrink-0 overflow-y-auto border-t border-panel-border">
+            <HeaderPanel meta={openMeta} />
+          </div>
         </div>
-        <ResizeHandle onPointerDown={left.onPointerDown} />
+      ) : (
+        /* Main: file browser | viewer | header */
+        <div className="flex min-h-0 flex-1">
+          <div
+            style={{ width: left.width }}
+            className="shrink-0 overflow-y-auto border-r border-panel-border"
+          >
+            <FileBrowserPanel products={products} selected={open} onSelect={onSelectFile} />
+          </div>
+          <ResizeHandle onPointerDown={left.onPointerDown} />
 
-        <JS9Viewer
-          source={source}
-          className="flex min-w-0 flex-1 flex-col overflow-hidden bg-sky-ink"
-        />
+          <JS9Viewer
+            source={source}
+            className="flex min-w-0 flex-1 flex-col overflow-hidden bg-sky-ink"
+          />
 
-        <ResizeHandle onPointerDown={right.onPointerDown} />
-        <div
-          style={{ width: right.width }}
-          className="shrink-0 overflow-y-auto border-l border-panel-border"
-        >
-          <HeaderPanel meta={openMeta} />
+          <ResizeHandle onPointerDown={right.onPointerDown} />
+          <div
+            style={{ width: right.width }}
+            className="shrink-0 overflow-y-auto border-l border-panel-border"
+          >
+            <HeaderPanel meta={openMeta} />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
