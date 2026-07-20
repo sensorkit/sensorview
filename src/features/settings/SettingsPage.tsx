@@ -62,8 +62,23 @@ export function SettingsPage() {
         </SettingsSection>
 
         <SettingsSection
+          id="program"
+          label="Program Name"
+          tooltip={
+            <>
+              Sent as <code>context.program_name</code> on every Collect task.
+              SensorKit substitutes it into the data pipeline's file-path
+              template (<code>{"{program_name}"}</code>). Use any label you want
+              — it doesn't need to match a registered SensorKit program.
+            </>
+          }
+        >
+          <ObservationProgramSettings />
+        </SettingsSection>
+
+        <SettingsSection
           id="connection"
-          label="SensorKit Connection"
+          label="SensorKit API"
           tooltip={
             <>
               SensorKit runs outside this app. Point to the SensorKit web API
@@ -87,21 +102,6 @@ export function SettingsPage() {
           }
         >
           <SensorViewApiSettings />
-        </SettingsSection>
-
-        <SettingsSection
-          id="program"
-          label="Program Name"
-          tooltip={
-            <>
-              Sent as <code>context.program_name</code> on every Collect task.
-              SensorKit substitutes it into the data pipeline's file-path
-              template (<code>{"{program_name}"}</code>). Use any label you want
-              — it doesn't need to match a registered SensorKit program.
-            </>
-          }
-        >
-          <ObservationProgramSettings />
         </SettingsSection>
 
         <SettingsSection id="direct-control">
