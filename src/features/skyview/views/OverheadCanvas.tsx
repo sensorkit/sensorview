@@ -8,7 +8,7 @@ import { renderMountReticlesOverhead } from "../layers/MountReticleLayer";
 import { useMountPointings } from "../../../lib/sensorkit-client/instruments";
 import { useGroundTrack } from "../hooks/useGroundTrack";
 import { useSkyViewStore } from "../../../stores/skyview";
-import { useSatelliteStore } from "../../../stores/satellites";
+import { parseSatKeyId, useSatelliteStore } from "../../../stores/satellites";
 import type { SatellitePosition } from "../../../stores/satellites";
 import type { ObserverLocation } from "../hooks/useObserver";
 import { quadtree, type Quadtree } from "d3-quadtree";
@@ -33,7 +33,7 @@ export function OverheadCanvas({ size, observer, positions, landGeoJSON, clipAng
   const satelliteCanvasRef = useRef<HTMLCanvasElement>(null);
   const pointingCanvasRef = useRef<HTMLCanvasElement>(null);
 
-  const { overheadZoom, overheadCenter, selectedSatelliteId, setOverheadZoom, setOverheadCenter } = useSkyViewStore();
+  const { overheadZoom, overheadCenter, selectedSatellite, setOverheadZoom, setOverheadCenter } = useSkyViewStore();
   const selectSatellite = useSkyViewStore((s) => s.selectSatellite);
   const tles = useSatelliteStore((s) => s.tles);
   const mountPointings = useMountPointings();
@@ -49,7 +49,7 @@ export function OverheadCanvas({ size, observer, positions, landGeoJSON, clipAng
     [size.width, size.height, centerLat, centerLon, overheadZoom, clipAngleOverride],
   );
 
-  const groundTrack = useGroundTrack(selectedSatelliteId);
+  const groundTrack = useGroundTrack(selectedSatellite);
 
   // Set up canvas dimensions
   useEffect(() => {
@@ -205,7 +205,7 @@ export function OverheadCanvas({ size, observer, positions, landGeoJSON, clipAng
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const nearest = liveRef.current.satQuadtree.find(x, y, HIT_RADIUS);
-      selectSatellite(nearest?.id ?? null);
+      selectSatellite(nearest ? parseSatKeyId(nearest.id) : null);
     };
 
     container.addEventListener("wheel", onWheel, { passive: false });
@@ -251,10 +251,10 @@ export function OverheadCanvas({ size, observer, positions, landGeoJSON, clipAng
   // Satellite layer — rAF loop reading from a ref. The propagator pushes
   // positions at 10 Hz; without decoupling from React we'd stack synchronous
   // canvas redraws faster than the main thread can finish them.
-  const satStateRef = useRef({ positions, tles, projection, selectedSatelliteId, groundTrack, centerLat, centerLon });
-  satStateRef.current = { positions, tles, projection, selectedSatelliteId, groundTrack, centerLat, centerLon };
+  const satStateRef = useRef({ positions, tles, projection, selectedSatellite, groundTrack, centerLat, centerLon });
+  satStateRef.current = { positions, tles, projection, selectedSatellite, groundTrack, centerLat, centerLon };
   const satDirtyRef = useRef(true);
-  useEffect(() => { satDirtyRef.current = true; }, [positions, tles, projection, selectedSatelliteId, groundTrack, centerLat, centerLon, size]);
+  useEffect(() => { satDirtyRef.current = true; }, [positions, tles, projection, selectedSatellite, groundTrack, centerLat, centerLon, size]);
 
   useEffect(() => {
     if (size.width === 0) return;
@@ -270,7 +270,7 @@ export function OverheadCanvas({ size, observer, positions, landGeoJSON, clipAng
           const viewpoint: ObserverLocation = { lat: s.centerLat, lon: s.centerLon, alt: 0, name: "overhead-center" };
           renderOverheadSatellites(
             ctx, size.width, size.height,
-            s.positions, s.tles, s.projection, s.selectedSatelliteId, s.groundTrack, viewpoint,
+            s.positions, s.tles, s.projection, s.selectedSatellite, s.groundTrack, viewpoint,
           );
         }
       }

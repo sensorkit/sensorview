@@ -5,14 +5,28 @@ import {
   eciToEcf,
   eciToGeodetic,
 } from "satellite.js";
-import type { SatellitePosition } from "../../../stores/satellites";
+import type { ElementSetKind, SatellitePosition } from "../../../stores/satellites";
+import { propagateStateVector, type StateVectorKm } from "../propagation/kepler";
 
 interface TLEInput {
+  kind?: "tle";
   noradId: string;
   name: string;
   line1: string;
   line2: string;
 }
+
+interface SVInput {
+  kind: "sv";
+  noradId: string;
+  name: string;
+  epoch: string;
+  frame: string;
+  r: { x: number; y: number; z: number };
+  v: { x: number; y: number; z: number };
+}
+
+type PropagatorInput = TLEInput | SVInput;
 
 interface Observer {
   lat: number;
@@ -20,10 +34,74 @@ interface Observer {
   alt: number;
 }
 
-let satrecCache: Map<
-  string,
-  { satrec: ReturnType<typeof twoline2satrec>; name: string }
-> = new Map();
+/** ECI position/velocity in km and km/s, whatever the underlying element set. */
+interface EciState {
+  position: { x: number; y: number; z: number };
+  velocity: { x: number; y: number; z: number };
+}
+
+/**
+ * A catalog object reduced to "give me its ECI state at time t". TLEs go
+ * through SGP4; state vectors through two-body propagation from their epoch.
+ *
+ * Frame caveat: SGP4 emits TEME, while uploaded state vectors are typically
+ * GCRF. The two differ by precession/nutation — a few tenths of a degree at
+ * present — and that offset is NOT corrected here, so an SV object's plotted
+ * position carries it. It is far smaller than the error from propagating a
+ * days-old state vector without perturbations, and it does not affect
+ * pointing: SensorKit receives the state vector with its own frame tag and
+ * does the rigorous transform itself.
+ */
+interface PropEntry {
+  kind: ElementSetKind;
+  noradId: string;
+  name: string;
+  at: (date: Date) => EciState | null;
+}
+
+function tleEntry(input: TLEInput): PropEntry | null {
+  try {
+    const satrec = twoline2satrec(input.line1, input.line2);
+    return {
+      kind: "tle",
+      noradId: input.noradId,
+      name: input.name,
+      at: (date) => {
+        const result = propagate(satrec, date);
+        if (typeof result.position === "boolean" || typeof result.velocity === "boolean") {
+          return null;
+        }
+        return { position: result.position, velocity: result.velocity };
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function svEntry(input: SVInput): PropEntry | null {
+  const epochMs = new Date(input.epoch).getTime();
+  if (!Number.isFinite(epochMs)) return null;
+  const state: StateVectorKm = { r: input.r, v: input.v };
+  return {
+    kind: "sv",
+    noradId: input.noradId,
+    name: input.name,
+    at: (date) => {
+      const next = propagateStateVector(state, (date.getTime() - epochMs) / 1000);
+      return next && { position: next.r, velocity: next.v };
+    },
+  };
+}
+
+function toEntry(input: PropagatorInput): PropEntry | null {
+  return input.kind === "sv" ? svEntry(input) : tleEntry(input as TLEInput);
+}
+
+/** Keyed by `${kind}:${noradId}` — a NORAD id alone is no longer unique. */
+let satrecCache: Map<string, PropEntry> = new Map();
+
+const cacheKey = (kind: ElementSetKind, noradId: string) => `${kind}:${noradId}`;
 
 // Cached rise/set/maxAlt — persisted between ticks, ticked down each second
 let riseSetCache: Map<string, { rise: number | null; set: number | null; maxAlt: number | null }> = new Map();
@@ -89,16 +167,16 @@ function topocentricFromEci(
   return { ra, dec, alt, az, range };
 }
 
-function computeAltAt(satrec: ReturnType<typeof twoline2satrec>, date: Date): number | null {
-  const result = propagate(satrec, date);
-  if (typeof result.position === "boolean") return null;
+function computeAltAt(entry: PropEntry, date: Date): number | null {
+  const result = entry.at(date);
+  if (!result) return null;
   const gmst = gstime(date);
   const { alt } = topocentricFromEci(result.position, gmst);
   return alt;
 }
 
 function computeRiseSetMax(
-  satrec: ReturnType<typeof twoline2satrec>,
+  entry: PropEntry,
   nowMs: number,
   currentAlt: number,
 ): { riseInMinutes: number | null; setInMinutes: number | null; maxAlt: number | null } {
@@ -109,7 +187,7 @@ function computeRiseSetMax(
     // Currently visible — scan forward for set time and max alt this pass
     let peakAlt = currentAlt;
     for (let dt = stepMs; dt <= maxMs; dt += stepMs) {
-      const alt = computeAltAt(satrec, new Date(nowMs + dt));
+      const alt = computeAltAt(entry, new Date(nowMs + dt));
       if (alt === null || alt < 0) {
         return { riseInMinutes: null, setInMinutes: dt / 60_000, maxAlt: peakAlt };
       }
@@ -121,7 +199,7 @@ function computeRiseSetMax(
     let riseMin: number | null = null;
     let peakAlt = 0;
     for (let dt = stepMs; dt <= maxMs; dt += stepMs) {
-      const alt = computeAltAt(satrec, new Date(nowMs + dt));
+      const alt = computeAltAt(entry, new Date(nowMs + dt));
       if (alt === null) return { riseInMinutes: null, setInMinutes: null, maxAlt: null };
       if (riseMin === null && alt > 0) {
         riseMin = dt / 60_000;
@@ -143,25 +221,22 @@ self.onmessage = (event: MessageEvent) => {
   const { type } = event.data;
 
   if (type === "setTLEs") {
-    const { tles } = event.data as { tles: TLEInput[] };
+    const { tles } = event.data as { tles: PropagatorInput[] };
     satrecCache = new Map();
     riseSetCache = new Map();
-    for (const tle of tles) {
-      try {
-        const satrec = twoline2satrec(tle.line1, tle.line2);
-        satrecCache.set(tle.noradId, { satrec, name: tle.name });
-      } catch { /* skip */ }
+    for (const input of tles) {
+      const entry = toEntry(input);
+      if (entry) satrecCache.set(cacheKey(entry.kind, entry.noradId), entry);
     }
     lastRiseSetTime = 0;
   }
 
   if (type === "addTLE") {
-    const { tle } = event.data as { tle: TLEInput };
-    if (!satrecCache.has(tle.noradId)) {
-      try {
-        const satrec = twoline2satrec(tle.line1, tle.line2);
-        satrecCache.set(tle.noradId, { satrec, name: tle.name });
-      } catch { /* skip */ }
+    const { tle } = event.data as { tle: PropagatorInput };
+    const key = cacheKey(tle.kind === "sv" ? "sv" : "tle", tle.noradId);
+    if (!satrecCache.has(key)) {
+      const entry = toEntry(tle);
+      if (entry) satrecCache.set(key, entry);
     }
   }
 
@@ -187,13 +262,13 @@ self.onmessage = (event: MessageEvent) => {
     const positions: SatellitePosition[] = [];
     let idx = 0;
 
-    for (const [noradId, { satrec }] of satrecCache) {
+    for (const [key, entry] of satrecCache) {
       const satBatch = idx % BATCHES;
       idx++;
 
       try {
-        const result = propagate(satrec, now);
-        if (typeof result.position === "boolean" || typeof result.velocity === "boolean") continue;
+        const result = entry.at(now);
+        if (!result) continue;
 
         const { ra, dec, alt, az, range } = topocentricFromEci(result.position, gmst);
         const velocity = Math.sqrt(
@@ -205,13 +280,13 @@ self.onmessage = (event: MessageEvent) => {
         let maxAlt: number | null = null;
 
         if (computeRiseSet && satBatch === currentBatch && alt > -15) {
-          const rs = computeRiseSetMax(satrec, time, alt);
+          const rs = computeRiseSetMax(entry, time, alt);
           riseInMinutes = rs.riseInMinutes;
           setInMinutes = rs.setInMinutes;
           maxAlt = rs.maxAlt;
-          riseSetCache.set(noradId, { rise: riseInMinutes, set: setInMinutes, maxAlt });
+          riseSetCache.set(key, { rise: riseInMinutes, set: setInMinutes, maxAlt });
         } else {
-          const cached = riseSetCache.get(noradId);
+          const cached = riseSetCache.get(key);
           if (cached) {
             riseInMinutes = cached.rise !== null ? Math.max(0, cached.rise - elapsedMin) : null;
             setInMinutes = cached.set !== null ? Math.max(0, cached.set - elapsedMin) : null;
@@ -232,7 +307,7 @@ self.onmessage = (event: MessageEvent) => {
         }
 
         const pos: SatellitePosition = {
-          noradId, ra, dec, alt, az,
+          kind: entry.kind, noradId: entry.noradId, ra, dec, alt, az,
           isVisible: alt > 0,
           range, velocity,
           riseInMinutes, setInMinutes, maxAlt,

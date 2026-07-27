@@ -15,6 +15,8 @@ export interface UIPanelsStore {
   imagePaneHeight: number;
   /** Restrict the latest-image panel to one controllerId; null = all (firehose latest). */
   imageFilterControllerId: string | null;
+  /** Images tab: auto-open the newest image off the firehose as it arrives. Off by default. */
+  imagesFollowLatest: boolean;
   /** Log panel font size in px. */
   logFontSize: number;
   /** Whether log lines word-wrap; false = no wrap (horizontal scroll). */
@@ -27,6 +29,7 @@ export interface UIPanelsStore {
   setDockWidth: (w: number) => void;
   setImagePaneHeight: (h: number) => void;
   setImageFilterControllerId: (id: string | null) => void;
+  setImagesFollowLatest: (on: boolean) => void;
   setLogFontSize: (n: number) => void;
   toggleLogWrap: () => void;
 }
@@ -39,6 +42,7 @@ export const useUIPanelsStore = create<UIPanelsStore>()(
       dockWidth: 360,
       imagePaneHeight: 300,
       imageFilterControllerId: null,
+      imagesFollowLatest: false,
       logFontSize: 10.5,
       logWrap: true,
 
@@ -49,6 +53,7 @@ export const useUIPanelsStore = create<UIPanelsStore>()(
       setDockWidth: (w) => set({ dockWidth: w }),
       setImagePaneHeight: (h) => set({ imagePaneHeight: h }),
       setImageFilterControllerId: (id) => set({ imageFilterControllerId: id }),
+      setImagesFollowLatest: (on) => set({ imagesFollowLatest: on }),
       setLogFontSize: (n) => set({ logFontSize: n }),
       toggleLogWrap: () => set((s) => ({ logWrap: !s.logWrap })),
     }),

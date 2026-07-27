@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useJS9, type JS9Image } from "../../lib/js9/useJS9";
+import { useJS9, type JS9Image, type JS9ErrorFn } from "../../lib/js9/useJS9";
 
 /** What the viewer should display: a dropped local file or a remote FITS URL. */
 export type ImageSource =
@@ -153,6 +153,83 @@ function configureInteractions(): void {
   interactionsConfigured = true;
 }
 
+/**
+ * A failed image load in stock JS9 pops a dead modal ("ERROR from
+ * astroem/cfitsio: …") and leaves the loading spinner stuck, because the fatal
+ * decode error takes a different path than JS9's own reporter: cfitsio routes
+ * through `Astroem.options.error` (bound to the ORIGINAL JS9.error at init), so
+ * overriding `JS9.error` alone never sees it. We trap all three sinks and, only
+ * while one of OUR loads is in flight, swallow the whole failure — no modal, no
+ * throw — clear the spinner, and hand the message to the viewer to show inline.
+ *
+ * Distinguishing fatal from benign matters: a perfectly good frame still emits
+ * a non-fatal "invalid WCS" warning. The fatal cfitsio errors are the ones
+ * astroem calls with its throw flag (`fatal === true`); we react to the first
+ * of those and treat everything else in the cascade as noise. A successful
+ * load's `onload` clears any message regardless, so a stray warning can't leave
+ * a spurious error on screen.
+ */
+let errorSink: ((message: string | null) => void) | null = null;
+let loadPhase = false; // true from our JS9.Load() until its onload or failure
+let loadGen = 0; // guards the post-failure reset against a newer load
+let loadFailed = false; // dedupes one failure's error cascade
+let trapInstalled = false;
+
+/** Arm the trap for a fresh load. Call immediately before JS9.Load(). */
+function beginLoad(): number {
+  loadPhase = true;
+  loadFailed = false;
+  errorSink?.(null); // clear any prior image's error
+  return ++loadGen;
+}
+
+/** A load reached onload — mark success so late warnings are ignored. */
+function endLoad(): void {
+  loadPhase = false;
+  loadFailed = false;
+  errorSink?.(null);
+}
+
+function installErrorTrap(): void {
+  if (trapInstalled) return;
+  const J = window.JS9;
+  if (!J) return;
+  const original = J.error;
+
+  const trap: JS9ErrorFn = function (this: unknown, msg, err, fatal) {
+    if (!loadPhase) {
+      // Not our load — leave JS9's default reporting untouched.
+      return original?.call(this, msg, err, fatal);
+    }
+    // Kill the spinner every time; JS9's astroem path doesn't reliably clear it.
+    try {
+      J.waiting?.(false);
+    } catch {
+      // ignore
+    }
+    // Only the throw-flagged astroem errors are real load failures; the first
+    // one carries the useful diagnosis. Benign warnings (no throw flag) are
+    // swallowed too — so no modal — but don't surface as an error.
+    if (fatal === true && !loadFailed) {
+      loadFailed = true;
+      const text = typeof msg === "string" ? msg : ((msg as Error)?.message ?? String(msg));
+      errorSink?.(text);
+      // Let the synchronous error cascade finish under loadPhase (so it's all
+      // swallowed), then stand down — unless a newer load has since begun.
+      const gen = loadGen;
+      window.setTimeout(() => {
+        if (loadGen === gen) loadPhase = false;
+      }, 0);
+    }
+    // Swallow: no modal, no re-throw.
+  };
+
+  J.error = trap;
+  if (J.fits?.options) J.fits.options.error = trap;
+  if (window.Astroem?.options) window.Astroem.options.error = trap;
+  trapInstalled = true;
+}
+
 /** Reformat JS9's "<value> <x> <y> (<sys>)" readout to "I=…, x=…, y=… (sys)". */
 function formatValpos(raw: string): string {
   const m = raw.trim().match(/^(\S+)\s+(\S+)\s+(\S+)\s+(\(.+\))$/);
@@ -178,6 +255,9 @@ export function JS9Viewer({ source, className }: Props) {
   const scrollHostRef = useRef<HTMLDivElement>(null);
   const lastKeyRef = useRef<string | null>(null);
   const [valpos, setValpos] = useState("");
+  // A per-image load failure (bad/corrupt FITS). Shown inline instead of JS9's
+  // dead modal; the error trap feeds it via the module-level errorSink.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // JS9 globals, set once it's loaded:
   //  - don't let JS9 hijack the window title with the image filename.
@@ -188,7 +268,16 @@ export function JS9Viewer({ source, className }: Props) {
     if (window.JS9.globalOpts) window.JS9.globalOpts.updateTitlebar = false;
     if (window.JS9.imageOpts) window.JS9.imageOpts.scaleclipping = "zscale";
     configureInteractions();
+    installErrorTrap();
   }, [ready]);
+
+  // Route trapped load errors into this component's state while it's mounted.
+  useEffect(() => {
+    errorSink = setLoadError;
+    return () => {
+      if (errorSink === setLoadError) errorSink = null;
+    };
+  }, []);
 
   // Reparent the one persistent display (and its menubar) into the page on
   // mount, then register it; park it back in the detached holder on unmount. The
@@ -295,8 +384,13 @@ export function JS9Viewer({ source, className }: Props) {
     } catch {
       // nothing open
     }
-    if (!source) return;
+    if (!source) {
+      setLoadError(null);
+      return;
+    }
 
+    // Arm the error trap for this load (also clears any prior error).
+    beginLoad();
     try {
       js9.Load(source.kind === "url" ? source.url : source.file, {
         display: DISPLAY_ID,
@@ -305,6 +399,7 @@ export function JS9Viewer({ source, className }: Props) {
         // display.image) so the correct frame is shown and fit even if a slower
         // earlier load is still in flight.
         onload(im: JS9Image) {
+          endLoad(); // success: clear the error state and stand the trap down
           try {
             im.displayImage?.("all"); // make this image current + paint it
           } catch {
@@ -319,6 +414,8 @@ export function JS9Viewer({ source, className }: Props) {
       });
     } catch (err) {
       console.error("JS9.Load failed", err);
+      setLoadError(err instanceof Error ? err.message : String(err));
+      loadPhase = false;
     }
   }, [ready, js9, source]);
 
@@ -355,6 +452,11 @@ export function JS9Viewer({ source, className }: Props) {
         ref={scrollHostRef}
         className="flex min-h-0 min-w-0 flex-1 flex-col items-start overflow-auto p-2"
       >
+        {loadError && (
+          <div className="mb-2 w-full shrink-0 rounded border border-red-500/40 bg-red-950/40 p-2 font-mono text-[11px] text-red-300">
+            Couldn’t load this image. {loadError}
+          </div>
+        )}
         <div ref={canvasHostRef} />
         <div className="mt-1 font-mono text-[11px] text-green-400">{formatValpos(valpos)}</div>
       </div>

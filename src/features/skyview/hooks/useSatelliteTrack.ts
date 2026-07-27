@@ -1,6 +1,12 @@
 import { useMemo } from "react";
-import { twoline2satrec, propagate, gstime, eciToEcf } from "satellite.js";
-import { useSatelliteStore } from "../../../stores/satellites";
+import { gstime, eciToEcf } from "satellite.js";
+import {
+  sameSatKey,
+  satKeyOf,
+  useSatelliteStore,
+  type SatKey,
+} from "../../../stores/satellites";
+import { eciStateAt, orbitalPeriodMinutes } from "../propagation/ephemeris";
 import type { ObserverLocation } from "./useObserver";
 
 export interface TrackPoint {
@@ -14,7 +20,7 @@ export interface TrackPoint {
  * Compute the orbital track for a selected satellite using topocentric RA/Dec.
  */
 export function useSatelliteTrack(
-  selectedId: string | null,
+  selectedId: SatKey | null,
   observer: ObserverLocation,
 ): TrackPoint[] {
   const tles = useSatelliteStore((s) => s.tles);
@@ -22,12 +28,10 @@ export function useSatelliteTrack(
   return useMemo(() => {
     if (!selectedId) return [];
 
-    const tle = tles.find((t) => t.noradId === selectedId);
+    const tle = tles.find((t) => sameSatKey(satKeyOf(t), selectedId));
     if (!tle) return [];
 
     try {
-      const satrec = twoline2satrec(tle.line1, tle.line2);
-
       // Precompute observer constants
       const latRad = (observer.lat * Math.PI) / 180;
       const lonRad = (observer.lon * Math.PI) / 180;
@@ -41,10 +45,9 @@ export function useSatelliteTrack(
       const obsEcfY = obsR * cosLat * sinLon;
       const obsEcfZ = obsR * sinLat;
 
-      // Time span based on mean motion
-      const meanMotion = parseFloat(tle.line2.substring(52, 63).trim());
-      const periodMin = 1440 / Math.max(0.1, meanMotion);
-      const halfSpanMin = periodMin * 0.5; // full orbit
+      // Time span is one full orbit, however the period is derived.
+      const periodMin = orbitalPeriodMinutes(tle);
+      const halfSpanMin = periodMin * 0.5;
       const steps = 300;
       const stepMin = (halfSpanMin * 2) / steps;
 
@@ -55,8 +58,8 @@ export function useSatelliteTrack(
         const offsetMin = -halfSpanMin + i * stepMin;
         const t = new Date(now + offsetMin * 60000);
 
-        const result = propagate(satrec, t);
-        if (typeof result.position === "boolean") continue;
+        const result = eciStateAt(tle, t);
+        if (!result) continue;
 
         const posEci = result.position;
         const gmst = gstime(t);

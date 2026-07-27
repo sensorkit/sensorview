@@ -1,4 +1,4 @@
-import type { TLERecord } from "../../stores/satellites";
+import type { SVRecord, TLERecord } from "../../stores/satellites";
 import { skUrl } from "../../stores/backends";
 
 // === Target builders ===
@@ -35,7 +35,34 @@ export interface EphemerisTarget {
   points: { ra: number; dec: number }[];
 }
 
-export type Target = ICRSTarget | AltAzTarget | TLETarget | EphemerisTarget;
+/**
+ * A target moving along the orbit implied by a single position/velocity state.
+ * Matches SK's `StateVectorTarget` (astro/target.py), which propagates it as
+ * an `OrbitalTrajectory` and treats it as a "rate" track mode.
+ *
+ * Units are SK's, not ours: **metres and metres per second**. SensorView
+ * stores state vectors in km and km/s throughout — matching the uploaded
+ * documents and the rest of the UI — and `stateVectorTarget` below is the one
+ * and only place that scales.
+ */
+export interface StateVectorTarget {
+  target_type: "state_vector";
+  /** SK ReferenceFrame name, lowercase. Usually "gcrf" for uploaded vectors. */
+  frame: string;
+  sv: {
+    /** ISO-8601 UTC instant the state is valid at. */
+    t: string;
+    r: { x: number; y: number; z: number };
+    v: { x: number; y: number; z: number };
+  };
+}
+
+export type Target =
+  | ICRSTarget
+  | AltAzTarget
+  | TLETarget
+  | EphemerisTarget
+  | StateVectorTarget;
 
 export function icrsTarget(raDeg: number, decDeg: number, name?: string | null): ICRSTarget {
   return {
@@ -51,6 +78,29 @@ export function tleTargetFrom(tle: TLERecord): TLETarget {
     target_type: "tle",
     frame: "teme",
     tle: { line0: tle.name ?? null, line1: tle.line1, line2: tle.line2 },
+  };
+}
+
+/** km -> m. SensorKit's StateVector is metres and metres per second. */
+const KM_TO_M = 1000;
+
+export function stateVectorTargetFrom(record: SVRecord): StateVectorTarget {
+  return {
+    target_type: "state_vector",
+    frame: record.frame,
+    sv: {
+      t: record.epoch,
+      r: {
+        x: record.r.x * KM_TO_M,
+        y: record.r.y * KM_TO_M,
+        z: record.r.z * KM_TO_M,
+      },
+      v: {
+        x: record.v.x * KM_TO_M,
+        y: record.v.y * KM_TO_M,
+        z: record.v.z * KM_TO_M,
+      },
+    },
   };
 }
 
@@ -164,6 +214,17 @@ export interface StandardCollectTask {
   // direct execution — the dispatch deadline rides on the submission's
   // `expiry_time` instead.
   end_time?: string; // ISO datetime
+  /**
+   * Human/catalog identifier for the object, copied into SK's `Collect` snapshot
+   * → the FITS `TARGET` card, and exposed to filename templates as `{target_id}`.
+   * If unset, SK only auto-derives an id for TLE (NORAD) and catalog targets;
+   * ICRS/ephemeris targets fall through to null and render as the literal string
+   * "None". This is the ONLY channel SK honors — a `target_id` in the submission
+   * `context` is overwritten by SK's compat layer. SK does NOT sanitize it, so
+   * keep it human-readable and, if it may contain path-unsafe chars, reference a
+   * sanitized `context` key (not `{target_id}`) in the filename template.
+   */
+  target_id?: string | null;
 }
 
 /**
@@ -185,6 +246,14 @@ export interface StandardCollectOpts {
   camera?: Partial<CameraParameterSet>;
   /** 0-based frame indices to capture under sidereal tracking (empty = none). */
   siderealFrames?: number[];
+  /**
+   * Human-readable identifier for the target, set as the task's `target_id`
+   * (→ FITS `TARGET` card). Cannot be passed via `context` — SK's compat layer
+   * overwrites a context-dict `target_id`. For a filesystem-safe filename, send a
+   * sanitized slug through a custom `context` key and reference it in the template
+   * (SK does not sanitize template output).
+   */
+  targetId?: string | null;
   /**
    * Task context (commonly holds `program_name`, which SensorKit's file-path
    * template resolves into the output directory). Threaded onto the minted
@@ -213,6 +282,7 @@ export function standardCollectTask(
         ...opts.camera,
       },
       sidereal_frames: opts.siderealFrames ?? [],
+      target_id: opts.targetId ?? null,
     },
     context: opts.context ?? null,
     expiry_time: expiry.toISOString(),

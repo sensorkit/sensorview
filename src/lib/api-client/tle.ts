@@ -1,4 +1,4 @@
-import type { TLERecord } from "../../stores/satellites";
+import type { CatalogRecord, TLERecord } from "../../stores/satellites";
 import { apiUrl } from "../../stores/backends";
 import { fetchWithRetry } from "./http";
 
@@ -10,7 +10,12 @@ import { fetchWithRetry } from "./http";
  * /sources endpoints manage that configuration.
  */
 
-export type TLESourceId = "spacebook" | "spacetrack" | "local" | "url";
+export type TLESourceId =
+  | "spacebook"
+  | "spacetrack"
+  | "local"
+  | "localsv"
+  | "url";
 
 export interface TLESourceStatus {
   id: TLESourceId;
@@ -21,12 +26,18 @@ export interface TLESourceStatus {
   cacheAgeHours: number | null;
   /** Space-Track: stored account name (null = not signed in). */
   username?: string | null;
-  /** Local file: name of the last uploaded file. */
+  /** Local uploads: name of the last uploaded file. */
   filename?: string | null;
   /** Custom URL: the configured endpoint. */
   url?: string | null;
-  /** Local file / custom URL: detected element-set format. */
-  format?: "2le" | "3le" | null;
+  /** Local uploads / custom URL: detected element-set format. */
+  format?: "2le" | "3le" | "sv" | null;
+  /**
+   * Local SV: earliest epoch in the uploaded set. State vectors decay as they
+   * age — two-body propagation carries no drag or J2 — so the UI ages this to
+   * warn when the set has drifted past being trustworthy.
+   */
+  oldestEpoch?: string | null;
 }
 
 export interface TLERefreshResult {
@@ -57,7 +68,7 @@ const jsonBody = (payload: unknown): RequestInit => ({
   body: JSON.stringify(payload),
 });
 
-export async function fetchTLECatalog(search?: string): Promise<TLERecord[]> {
+export async function fetchTLECatalog(search?: string): Promise<CatalogRecord[]> {
   const params = new URLSearchParams();
   if (search) params.set("search", search);
 
@@ -137,6 +148,13 @@ export async function uploadLocalTLEFile(
   content: string,
 ): Promise<{ count: number; format: "2le" | "3le"; sources: TLESourceStatus[] }> {
   return requestJSON("/api/tle/sources/local", jsonBody({ filename, content }));
+}
+
+export async function uploadLocalSVFile(
+  filename: string,
+  content: string,
+): Promise<{ count: number; format: "sv"; sources: TLESourceStatus[] }> {
+  return requestJSON("/api/tle/sources/local-sv", jsonBody({ filename, content }));
 }
 
 export async function fetchCustomTLEUrl(

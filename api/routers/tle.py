@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from services.spacebook import SpacebookClient
 from services.spacetrack import SpaceTrackAuthError, SpaceTrackClient, SpaceTrackError
 from services.tle_cache import SOURCE_IDS, TLECacheService
+from services.sv_parser import StateVectorParseError, parse_sv_text
 from services.tle_parser import parse_tle_text
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,8 @@ _spacebook = SpacebookClient()
 _spacetrack = SpaceTrackClient()
 
 STALE_HOURS = 12
-# Sources that can be re-fetched on demand ('local' only changes on upload).
+# Sources that can be re-fetched on demand ('local'/'localsv' only change on
+# upload).
 REMOTE_SOURCES = ("spacebook", "spacetrack", "url")
 URL_FETCH_TIMEOUT = 120.0
 
@@ -140,6 +142,7 @@ async def _sources_response() -> dict[str, Any]:
     rows, cfg = await _cache.get_sources_status()
     username = await _cache.get_meta("spacetrack_identity")
     local_meta = json.loads(await _cache.get_meta("local_meta") or "{}")
+    localsv_meta = json.loads(await _cache.get_meta("localsv_meta") or "{}")
     url_meta = json.loads(await _cache.get_meta("url_meta") or "{}")
     for row in rows:
         if row["id"] == "spacetrack":
@@ -147,6 +150,12 @@ async def _sources_response() -> dict[str, Any]:
         elif row["id"] == "local":
             row["filename"] = local_meta.get("filename")
             row["format"] = local_meta.get("format")
+        elif row["id"] == "localsv":
+            row["filename"] = localsv_meta.get("filename")
+            row["format"] = localsv_meta.get("format")
+            # Oldest epoch in the uploaded set — the UI ages this to warn that
+            # a state vector has drifted too far to trust.
+            row["oldestEpoch"] = localsv_meta.get("oldestEpoch")
         elif row["id"] == "url":
             row["url"] = cfg["customUrl"] or None
             row["format"] = url_meta.get("format")
@@ -212,6 +221,29 @@ async def upload_local_file(body: LocalUpload):
     return {"count": count, "format": fmt, **await _sources_response()}
 
 
+@router.post("/sources/local-sv")
+async def upload_local_sv_file(body: LocalUpload):
+    """Parse an uploaded .sv document and replace the local-SV source's rows."""
+    try:
+        records = parse_sv_text(body.content)
+    except StateVectorParseError as err:
+        # The parser's messages name the offending field and entry, so they go
+        # straight to the upload dialog rather than a generic failure.
+        raise HTTPException(status_code=422, detail=str(err)) from err
+
+    count = await _cache.replace_sv_source("localsv", records)
+    await _cache.set_meta(
+        "localsv_meta",
+        json.dumps({
+            "filename": body.filename,
+            "format": "sv",
+            "oldestEpoch": min(r["epoch"] for r in records),
+        }),
+    )
+    await _cache.set_config({"enabled": {"localsv": True}})
+    return {"count": count, "format": "sv", **await _sources_response()}
+
+
 @router.post("/sources/url/fetch")
 async def fetch_custom_url(body: CustomUrlBody):
     """Store the custom URL, fetch it, and enable the source on success."""
@@ -242,11 +274,22 @@ async def get_catalog(
 
 
 @router.get("/satellite/{norad_id}")
-async def get_satellite(norad_id: str):
-    """Return the highest-priority TLE for a satellite by NORAD ID."""
-    record = await _cache.get_by_norad_id(norad_id)
+async def get_satellite(
+    norad_id: str,
+    kind: str = Query("tle", description='Element-set kind: "tle" or "sv"'),
+):
+    """Return the highest-priority element set for a satellite by NORAD ID.
+
+    A NORAD id can carry both a TLE and a state vector, so `kind` selects
+    between them; it defaults to "tle" for callers that predate SV support.
+    """
+    if kind not in ("tle", "sv"):
+        raise HTTPException(status_code=422, detail=f'Unknown kind "{kind}"')
+    record = await _cache.get_by_norad_id(norad_id, kind)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"Satellite {norad_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"No {kind.upper()} for satellite {norad_id}"
+        )
     return record
 
 

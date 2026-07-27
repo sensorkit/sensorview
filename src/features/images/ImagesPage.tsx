@@ -1,9 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { JS9Viewer, type ImageSource } from "./JS9Viewer";
 import { FileBrowserPanel } from "./FileBrowserPanel";
 import { HeaderPanel } from "./HeaderPanel";
 import { useResizableWidth } from "./useResizableWidth";
+import { Toggle } from "../settings/Toggle";
 import { useSensorKitStore } from "../../stores/sensorkit";
+import { useUIPanelsStore } from "../../stores/uiPanels";
 import { fetchProductMetadata, productDataUrl } from "../../lib/sensorkit-client/products";
 import type { ProductMetadata } from "../../lib/sensorkit-client/types";
 import { useCompactLayout } from "../../lib/useMediaQuery";
@@ -28,6 +30,10 @@ export function ImagesPage() {
   const entities = useSensorKitStore((s) => s.entities);
   const selectedInstrumentId = useSensorKitStore((s) => s.selectedInstrumentId);
   const connection = useSensorKitStore((s) => s.connection);
+  const latestProduct = useSensorKitStore((s) => s.latestProduct);
+
+  const followLatest = useUIPanelsStore((s) => s.imagesFollowLatest);
+  const setFollowLatest = useUIPanelsStore((s) => s.setImagesFollowLatest);
 
   const controllers = useMemo(
     () => entities.filter((e) => e.entity_type === "controller"),
@@ -65,6 +71,25 @@ export function ImagesPage() {
     }
   }, []);
 
+  // Auto-follow: when enabled, open each new firehose-latest product as it
+  // arrives — and snap to the current latest the moment it's switched on. Rides
+  // the store's single `latestProduct` pointer (whose identity only changes on a
+  // genuinely newer arrival, capped at the ~10Hz batch commit) instead of
+  // rescanning the products map, and de-dupes by key so a same-product pointer
+  // refresh (e.g. a backlog merge) doesn't reload the viewer.
+  const followedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!followLatest) {
+      followedKeyRef.current = null;
+      return;
+    }
+    if (!latestProduct) return;
+    const key = `${latestProduct.controllerId}/${latestProduct.productId}`;
+    if (followedKeyRef.current === key) return;
+    followedKeyRef.current = key;
+    onSelectFile(latestProduct.controllerId, latestProduct.productId);
+  }, [followLatest, latestProduct, onSelectFile]);
+
   return (
     <div className="flex h-full flex-col">
       {/* Top bar: controller picker, or connection status when offline */}
@@ -90,6 +115,20 @@ export function ImagesPage() {
             )}
           </label>
         )}
+
+        {/* Right-aligned live-follow switch: keep the viewer pinned to the
+            newest image off the firehose. Off by default (persisted). */}
+        <div className="ml-auto shrink-0">
+          <Toggle
+            size="sm"
+            checked={followLatest}
+            onChange={setFollowLatest}
+            label={
+              <span className="uppercase tracking-wide text-xs text-text-dim">Open latest image</span>
+            }
+            title="When on, the viewer jumps to the newest image as it arrives"
+          />
+        </div>
       </div>
 
       {compact ? (

@@ -7,7 +7,7 @@ import { renderMountReticlesGroundTrack } from "../layers/MountReticleLayer";
 import { useMountPointings } from "../../../lib/sensorkit-client/instruments";
 import { useGroundTrack } from "../hooks/useGroundTrack";
 import { useSkyViewStore } from "../../../stores/skyview";
-import { useSatelliteStore } from "../../../stores/satellites";
+import { parseSatKeyId, useSatelliteStore } from "../../../stores/satellites";
 import type { SatellitePosition } from "../../../stores/satellites";
 import type { ObserverLocation } from "../hooks/useObserver";
 import { quadtree, type Quadtree } from "d3-quadtree";
@@ -31,7 +31,7 @@ export function GroundTrackCanvas({ size, observer, positions, landGeoJSON, disa
 
   const {
     groundTrackCenterLon, groundTrackCenterLat, groundTrackZoom,
-    selectedSatelliteId,
+    selectedSatellite,
     setGroundTrackCenter, setGroundTrackZoom,
   } = useSkyViewStore();
 
@@ -48,7 +48,7 @@ export function GroundTrackCanvas({ size, observer, positions, landGeoJSON, disa
   );
 
   // Ground track for selected satellite
-  const groundTrack = useGroundTrack(selectedSatelliteId);
+  const groundTrack = useGroundTrack(selectedSatellite);
 
   // Set up canvas dimensions
   useEffect(() => {
@@ -194,7 +194,7 @@ export function GroundTrackCanvas({ size, observer, positions, landGeoJSON, disa
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
         const nearest = liveRef.current.satQuadtree.find(x, y, HIT_RADIUS_GT);
-        selectSatellite(nearest?.id ?? null);
+        selectSatellite(nearest ? parseSatKeyId(nearest.id) : null);
       }
     };
 
@@ -228,9 +228,9 @@ export function GroundTrackCanvas({ size, observer, positions, landGeoJSON, disa
     if (!ctx) return;
     renderGroundTrackSatellites(
       ctx, size.width, size.height,
-      positions, tles, projection, selectedSatelliteId, groundTrack,
+      positions, tles, projection, selectedSatellite, groundTrack,
     );
-  }, [positions, tles, projection, selectedSatelliteId, groundTrack, size, getCtx]);
+  }, [positions, tles, projection, selectedSatellite, groundTrack, size, getCtx]);
 
   // Mount pointing arrows
   useEffect(() => {

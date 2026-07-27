@@ -8,6 +8,23 @@ function formatVal(v: unknown): string {
   return String(v);
 }
 
+/**
+ * Pull the FITS cards out of SK's `/metadata` response.
+ *
+ * The response is a KeywordDict keyed by keyword *class* name. Since sensorkit
+ * "Nest FITS cards under the `FITSHeader` keyword" the cards live in a
+ * `FITSHeader` sub-object alongside `ProductInfo`; older builds spread the
+ * cards flat at the top level instead. Accept either, so the panel keeps
+ * working against whichever SK a site is running.
+ */
+function fitsCards(meta: ProductMetadata): [string, unknown][] {
+  const nested = meta.FITSHeader;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return Object.entries(nested as Record<string, unknown>);
+  }
+  return Object.entries(meta).filter(([k]) => k !== "ProductInfo");
+}
+
 interface Props {
   meta: ProductMetadata | null;
 }
@@ -18,8 +35,7 @@ export function HeaderPanel({ meta }: Props) {
     return null;
   }
 
-  // The serve API injects a `ProductInfo` entry into the header dict — drop it.
-  const entries = Object.entries(meta).filter(([k]) => k !== "ProductInfo");
+  const entries = fitsCards(meta);
 
   return (
     <div className="p-2">

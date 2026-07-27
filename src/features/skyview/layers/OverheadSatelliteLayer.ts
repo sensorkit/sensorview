@@ -1,5 +1,12 @@
 import type { GeoProjection } from "d3-geo";
-import type { SatellitePosition, TLERecord } from "../../../stores/satellites";
+import {
+  sameSatKey,
+  satKeyId,
+  satKeyOf,
+  type CatalogRecord,
+  type SatellitePosition,
+  type SatKey,
+} from "../../../stores/satellites";
 import type { GroundTrackPoint } from "../hooks/useGroundTrack";
 import type { ObserverLocation } from "../hooks/useObserver";
 import { project3D, makeObserver3D, overheadScale } from "../projection3d";
@@ -13,15 +20,15 @@ export function renderOverheadSatellites(
   width: number,
   height: number,
   positions: SatellitePosition[],
-  tles: TLERecord[],
+  tles: CatalogRecord[],
   projection: GeoProjection,
-  selectedId: string | null,
+  selectedId: SatKey | null,
   groundTrack: GroundTrackPoint[],
   observer: ObserverLocation,
 ) {
   ctx.clearRect(0, 0, width, height);
 
-  const tleMap = new Map(tles.map((t) => [t.noradId, t]));
+  const tleMap = new Map(tles.map((t) => [satKeyId(satKeyOf(t)), t]));
   const cx = width / 2;
   const cy = height / 2;
   const earthScreenR = projection.scale();
@@ -65,14 +72,14 @@ export function renderOverheadSatellites(
 
     // "Now" marker with glow and label — driven by the live position, not the
     // snapshot track, so it moves as the sat propagates.
-    const livePos = positions.find((p) => p.noradId === selectedId);
+    const livePos = positions.find((p) => sameSatKey(p, selectedId));
     const nowScreen = livePos && livePos.lat != null && livePos.lon != null
       ? project3D(livePos.lat, livePos.lon, livePos.satAlt ?? 0, obs, scale3d, cx, cy)
       : null;
     if (nowScreen) {
-      const regime = tleMap.get(selectedId)?.orbitRegime ?? "OTHER";
+      const regime = tleMap.get(satKeyId(selectedId))?.orbitRegime ?? "OTHER";
       const color = regimeColor(regime);
-      const name = tleMap.get(selectedId)?.name ?? selectedId;
+      const name = tleMap.get(satKeyId(selectedId))?.name ?? selectedId.noradId;
 
       // Glow
       const grad = ctx.createRadialGradient(nowScreen[0], nowScreen[1], 0, nowScreen[0], nowScreen[1], 12);
@@ -104,7 +111,7 @@ export function renderOverheadSatellites(
   // Draw non-selected satellites using same 3D projection
   for (const pos of positions) {
     if (pos.lat == null || pos.lon == null) continue;
-    if (pos.noradId === selectedId) continue;
+    if (selectedId && sameSatKey(pos, selectedId)) continue;
 
     const pt = project3D(pos.lat, pos.lon, pos.satAlt ?? 0, obs, scale3d, cx, cy);
     if (!pt) continue;

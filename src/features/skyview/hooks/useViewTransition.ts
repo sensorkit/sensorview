@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 import { useSkyViewStore } from "../../../stores/skyview";
-import { useSatelliteStore } from "../../../stores/satellites";
+import { useSatelliteStore,
+  sameSatKey,
+  satKeyOf,
+} from "../../../stores/satellites";
 
 const ZOOM_MS = 600;
 
@@ -44,9 +47,9 @@ export function useViewTransition() {
     // previous session left the globe panned.
     setOverheadCenter(null);
 
-    const selectedId = useSkyViewStore.getState().selectedSatelliteId;
+    const selectedId = useSkyViewStore.getState().selectedSatellite;
     const tles = useSatelliteStore.getState().tles;
-    const tle = selectedId ? tles.find((t) => t.noradId === selectedId) : null;
+    const tle = selectedId ? tles.find((t) => sameSatKey(satKeyOf(t), selectedId)) : null;
     const targetZoom = overheadZoomForRegime(tle?.orbitRegime);
     // Start from 1.0 so the globe fills the viewport, then ease to the
     // regime-appropriate zoom (tight on LEO, wide on GEO).

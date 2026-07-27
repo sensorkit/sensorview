@@ -4,6 +4,7 @@ import { useSensorKitStore } from "../stores/sensorkit";
 import { useObserver, lstDegrees } from "../features/skyview/hooks/useObserver";
 import { setAgentEnabled } from "../lib/sensorkit-client/commands";
 import { RightDock } from "../features/panels/RightDock";
+import { TabErrorBoundary } from "./TabErrorBoundary";
 import {
   useTabsStore,
   reconcileOrder,
@@ -20,6 +21,7 @@ import {
 export function AppLayout() {
   const connection = useSensorKitStore((s) => s.connection);
   const { observer } = useObserver();
+  const { pathname } = useLocation();
   const syncDetached = useTabsStore((s) => s.syncDetached);
   const setDetached = useTabsStore((s) => s.setDetached);
 
@@ -59,7 +61,9 @@ export function AppLayout() {
           Below lg the dock overlays instead (see RightDock), hence `relative`. */}
       <div className="flex-1 min-h-0 flex relative">
         <div className="flex-1 min-w-0 min-h-0">
-          <Outlet />
+          <TabErrorBoundary resetKey={pathname}>
+            <Outlet />
+          </TabErrorBoundary>
         </div>
         <RightDock />
       </div>

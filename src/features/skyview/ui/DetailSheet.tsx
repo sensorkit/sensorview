@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useSatelliteStore, type TLERecord } from "../../../stores/satellites";
+import { SVEpochNotice } from "./SVEpochBadge";
+import {
+  isSV,
+  sameSatKey,
+  satKeyOf,
+  satLabel,
+  useSatelliteStore,
+  type CatalogRecord,
+  type SatellitePosition,
+  type SatKey,
+} from "../../../stores/satellites";
 import { useSkyViewStore } from "../../../stores/skyview";
 import { useSensorKitStore } from "../../../stores/sensorkit";
 import { useBackends } from "../../../stores/backends";
@@ -22,6 +32,7 @@ import {
   ephemerisTarget,
   sendDeviceCommand,
   standardCollectTask,
+  stateVectorTargetFrom,
   tleTargetFrom,
   type Target,
 } from "../../../lib/sensorkit-client/commands";
@@ -44,7 +55,7 @@ export function DetailSheet({ catalog }: Props) {
   const { observer } = useObserver();
   const bodies = useSolarSystemBodies(observer);
   const {
-    selectedSatelliteId, selectedStarIndex, selectedBodyName,
+    selectedSatellite, selectedStarIndex, selectedBodyName,
     manualTarget, detailSheetOpen,
     selectSatellite, selectStar, selectBody, clearManualTarget, setDetailSheetOpen,
   } = useSkyViewStore();
@@ -59,8 +70,8 @@ export function DetailSheet({ catalog }: Props) {
 
   if (!detailSheetOpen) return null;
 
-  if (selectedSatelliteId) {
-    return <SatelliteDetail id={selectedSatelliteId} positions={positions} tles={tles} onClose={close} />;
+  if (selectedSatellite) {
+    return <SatelliteDetail id={selectedSatellite} positions={positions} tles={tles} onClose={close} />;
   }
 
   if (selectedStarIndex !== null && catalog) {
@@ -80,13 +91,13 @@ export function DetailSheet({ catalog }: Props) {
 }
 
 function SatelliteDetail({ id, positions, tles, onClose }: {
-  id: string;
-  positions: { noradId: string; alt: number; az: number; ra: number; dec: number; range: number; velocity: number; isVisible: boolean; maxAlt: number | null; setInMinutes: number | null; lat?: number; lon?: number; satAlt?: number }[];
-  tles: TLERecord[];
+  id: SatKey;
+  positions: SatellitePosition[];
+  tles: CatalogRecord[];
   onClose: () => void;
 }) {
-  const sat = useMemo(() => positions.find((p) => p.noradId === id), [positions, id]);
-  const tle = useMemo(() => tles.find((t) => t.noradId === id), [tles, id]);
+  const sat = useMemo(() => positions.find((p) => sameSatKey(p, id)), [positions, id]);
+  const tle = useMemo(() => tles.find((t) => sameSatKey(satKeyOf(t), id)), [tles, id]);
 
   if (!sat) return null;
 
@@ -96,12 +107,10 @@ function SatelliteDetail({ id, positions, tles, onClose }: {
         <div className="flex items-start justify-between mb-3">
           <div>
             <h3 className="text-sm font-semibold text-text-bright">
-              {!tle?.name || /^SAT\s+\d+$/i.test(tle.name)
-                ? `TLE · ${id}`
-                : tle.name}
+              {satLabel(tle, id.noradId).text}
             </h3>
             <span className="text-xs text-text-dim">
-              NORAD {id}
+              NORAD {id.noradId}
               {tle?.orbitRegime && (
                 <span className="ml-2 px-1.5 py-0.5 bg-blue-600/20 text-blue-300 rounded text-[10px]">
                   {tle.orbitRegime}
@@ -111,6 +120,10 @@ function SatelliteDetail({ id, positions, tles, onClose }: {
           </div>
           <button onClick={onClose} className="text-text-dim hover:text-text-bright text-lg leading-none">&times;</button>
         </div>
+
+        {isSV(tle) && (
+          <SVEpochNotice epoch={tle.epoch} orbitRegime={tle.orbitRegime} />
+        )}
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-3">
           <DataRow label="Alt" value={`${sat.alt.toFixed(2)}\u00b0`} />
@@ -304,7 +317,7 @@ function ManualTargetDetail({ ra, dec, onClose }: {
 }
 
 export type ActionTarget =
-  | { kind: "satellite"; ra: number; dec: number; tle: TLERecord | undefined }
+  | { kind: "satellite"; ra: number; dec: number; tle: CatalogRecord | undefined }
   | { kind: "star"; ra: number; dec: number; name: string }
   | { kind: "manual"; ra: number; dec: number }
   | { kind: "body"; ra: number; dec: number; name: string }
@@ -430,7 +443,15 @@ export function ActionButtons({
     }
   }, [status.phase]);
 
-  const satTle = target.kind === "satellite" ? target.tle : undefined;
+  const satRecord = target.kind === "satellite" ? target.tle : undefined;
+  // Both element-set kinds give SK a rate-tracked orbital target — a TLETarget
+  // for TLEs, a StateVectorTarget for uploaded state vectors. Everything else
+  // falls through to ICRS.
+  const orbitalTarget = satRecord
+    ? isSV(satRecord)
+      ? stateVectorTargetFrom(satRecord)
+      : tleTargetFrom(satRecord)
+    : null;
   // Track is meaningful for any non-manual target: satellites via TLE,
   // stars and bodies via sidereal-rate ICRS tracking. Manual RA/Dec drops
   // through to Slew alone since the operator probably wants a static
@@ -490,10 +511,10 @@ export function ActionButtons({
     // satellite's path). For stars / solar-system bodies / anything else,
     // track via ICRS — SK's FollowTarget on an ICRSTarget produces sidereal-
     // rate tracking that keeps the inertial position centered.
-    if (satTle) {
-      setMountTarget(active.id, { kind: "satellite", noradId: satTle.noradId });
+    if (orbitalTarget && satRecord) {
+      setMountTarget(active.id, { kind: "satellite", noradId: satRecord.noradId });
       runAction("Track", () =>
-        sendDeviceCommand(active.mount!, followTarget(tleTargetFrom(satTle))),
+        sendDeviceCommand(active.mount!, followTarget(orbitalTarget)),
       );
     } else {
       setMountTarget(active.id, { kind: "icrs", ra: target.ra, dec: target.dec });
@@ -508,18 +529,29 @@ export function ActionButtons({
 
   const onCollect = (preset: CollectPreset) => {
     if (!active) return;
-    if (satTle) setMountTarget(active.id, { kind: "satellite", noradId: satTle.noradId });
+    if (satRecord) setMountTarget(active.id, { kind: "satellite", noradId: satRecord.noradId });
     else setMountTarget(active.id, { kind: "icrs", ra: target.ra, dec: target.dec });
     const programName = useBackends.getState().programName.trim() || "sensorview";
     const rawTargetId =
-      target.kind === "satellite" ? (satTle?.noradId ?? "manual")
+      target.kind === "satellite" ? (satRecord?.noradId ?? "manual")
       : target.kind === "star" ? target.name
       : target.kind === "body" ? target.name
       : target.kind === "horizons" ? target.name
       : "manual";
-    // Sanitize for filesystem use: star/body labels can contain spaces or Greek letters.
-    const safe = (s: string) => s.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "x";
-    const targetId = safe(rawTargetId);
+    // rawTargetId is the human-readable id: it rides on the task body → SK's
+    // Collect snapshot → the FITS `TARGET` card, so we keep it verbatim (e.g.
+    // "1 Ceres (A801 AA)").
+    //
+    // The *filename* instead uses a filesystem-safe slug, since SK drops the
+    // template's values into the output path verbatim (no sanitizing). Whitelist
+    // to path-safe chars, collapse every other run — spaces, colons, slashes,
+    // parentheses — to a single "_", and trim leading/trailing separators so we
+    // never emit a dotfile or a leading "-". The slug travels as a custom
+    // `target_slug` context key: SK's compat layer rewrites its built-in fields
+    // (`{target_id}`, `{target_name}`, …) but leaves unknown keys untouched.
+    const safe = (s: string) =>
+      s.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^[._-]+|[._-]+$/g, "") || "x";
+    const targetSlug = safe(rawTargetId);
     const programSafe = safe(programName);
     const collectTime = new Date().toISOString().replace(/[-:]/g, "").split(".")[0]; // 20260422T143012
     // Horizons ephemeris collects fetch a fresh, collect-sized ephemeris at
@@ -529,8 +561,8 @@ export function ActionButtons({
     runAction(`Collect (${preset.name})`, async () => {
       let t: Target;
       let endTime: Date | undefined;
-      if (satTle) {
-        t = tleTargetFrom(satTle);
+      if (orbitalTarget) {
+        t = orbitalTarget;
       } else if (ephemTarget) {
         const win = collectWindow({
           integrationSec: preset.integration_time_seconds,
@@ -562,6 +594,14 @@ export function ActionButtons({
           frameCount: preset.frame_count,
           endTime,
           siderealFrames: preset.sidereal_frames ?? [],
+          // Human-readable target id on the task body → SK copies it into the
+          // Collect snapshot, which feeds the FITS `TARGET` card. Kept raw; the
+          // filesystem-safe form rides in `target_slug` below. SK only
+          // auto-derives an id for TLE/catalog targets, so our star/body/Horizons
+          // ICRS/ephemeris collects would otherwise be null (→ literal "None").
+          // Must ride the task body, not `context` — SK's compat layer overwrites
+          // a context-dict `target_id`.
+          targetId: rawTargetId,
           camera: {
             binning_x: preset.binning_x ?? null,
             binning_y: preset.binning_y ?? null,
@@ -571,13 +611,19 @@ export function ActionButtons({
           },
           context: {
             program_name: programSafe,
-            target_id: targetId,
             controller_name: active.id,
             collect_time: collectTime,
+            // Filesystem-safe slug for the filename. A custom key (not a built-in
+            // like `target_id`) so SK's compat layer passes it through verbatim —
+            // it survives from the submission context into the template namespace
+            // just like `program_name`.
+            target_slug: targetSlug,
             // SK keyword: key must be the registered name `FileNameTemplate` and
             // the value an object matching the model (`{ template: "…" }`), or the
-            // webapi won't deserialize it as a keyword. Template string unchanged.
-            FileNameTemplate: { template: "{program_name}_{target_id}_{collect_time}_f{frame_num:03d}.fits" },
+            // webapi won't deserialize it as a keyword. The template references
+            // `{target_slug}` (our sanitized key), NOT SK's `{target_id}`, which
+            // would carry the raw label's spaces/parentheses straight into the path.
+            FileNameTemplate: { template: "{program_name}_{target_slug}_{collect_time}_f{frame_num:03d}.fits" },
           },
         }),
       );
@@ -646,7 +692,7 @@ export function ActionButtons({
               sunTooltip ??
               noInstrumentsMsg ??
               mountBusyReason ??
-              (!hasMount ? "No mount available" : !satTle ? "TLE not loaded" : "Track target")
+              (!hasMount ? "No mount available" : !satRecord ? "Elements not loaded" : "Track target")
             }
             onClick={onTrack}
             tone="blue"
@@ -852,9 +898,10 @@ function CollectSplitButton({
               <button
                 key={p.id}
                 onClick={() => {
+                  // Selecting a preset only makes it the default; it does not
+                  // start a collect. The user starts it with the Collect button.
                   setDefault(p.id);
                   setOpen(false);
-                  if (!disabled) onCollect(p);
                 }}
                 className="w-full text-left px-2 py-1.5 rounded-sm"
                 style={{

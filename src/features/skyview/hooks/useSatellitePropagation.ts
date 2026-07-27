@@ -1,10 +1,43 @@
 import { useEffect, useRef } from "react";
-import { useSatelliteStore, type SatellitePosition } from "../../../stores/satellites";
+import {
+  isSV,
+  satKeyId,
+  satKeyOf,
+  useSatelliteStore,
+  type CatalogRecord,
+  type SatellitePosition,
+} from "../../../stores/satellites";
 import type { ObserverLocation } from "./useObserver";
 
 /**
- * Manages the Web Worker that propagates satellite positions from TLEs.
- * Fast position ticks at 10Hz, rise/set computation every 10 seconds.
+ * Reduce a catalog record to the fields the worker propagates from. Sent by
+ * postMessage, so it must be structured-cloneable — plain data only.
+ */
+function toWorkerInput(record: CatalogRecord) {
+  if (isSV(record)) {
+    return {
+      kind: "sv" as const,
+      noradId: record.noradId,
+      name: record.name,
+      epoch: record.epoch,
+      frame: record.frame,
+      r: record.r,
+      v: record.v,
+    };
+  }
+  return {
+    kind: "tle" as const,
+    noradId: record.noradId,
+    name: record.name,
+    line1: record.line1,
+    line2: record.line2,
+  };
+}
+
+/**
+ * Manages the Web Worker that propagates satellite positions from TLEs and
+ * uploaded state vectors. Fast position ticks at 10Hz, rise/set computation
+ * every 10 seconds.
  */
 export function useSatellitePropagation(observer: ObserverLocation, computeGeodetic = false) {
   const workerRef = useRef<Worker | null>(null);
@@ -34,24 +67,18 @@ export function useSatellitePropagation(observer: ObserverLocation, computeGeode
     const worker = workerRef.current;
     if (!worker || tles.length === 0) return;
 
-    const currentIds = new Set(tles.map((t) => t.noradId));
+    // Keyed by kind too: the same NORAD id can be present as both a TLE and a
+    // state vector, and they propagate independently.
+    const currentIds = new Set(tles.map((t) => satKeyId(satKeyOf(t))));
     const sent = sentIdsRef.current;
     const removed = [...sent].some((id) => !currentIds.has(id));
-    const added = tles.filter((t) => !sent.has(t.noradId));
+    const added = tles.filter((t) => !sent.has(satKeyId(satKeyOf(t))));
 
     if (removed || sent.size === 0) {
-      worker.postMessage({
-        type: "setTLEs",
-        tles: tles.map((t) => ({
-          noradId: t.noradId, name: t.name, line1: t.line1, line2: t.line2,
-        })),
-      });
+      worker.postMessage({ type: "setTLEs", tles: tles.map(toWorkerInput) });
     } else {
       for (const t of added) {
-        worker.postMessage({
-          type: "addTLE",
-          tle: { noradId: t.noradId, name: t.name, line1: t.line1, line2: t.line2 },
-        });
+        worker.postMessage({ type: "addTLE", tle: toWorkerInput(t) });
       }
     }
     sentIdsRef.current = currentIds;

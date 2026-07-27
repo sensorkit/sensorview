@@ -6,7 +6,7 @@ import {
   useSensorKitStore,
   type StateMap,
 } from "../../stores/sensorkit";
-import { useSatelliteStore } from "../../stores/satellites";
+import { satLabel, useSatelliteStore, type CatalogRecord } from "../../stores/satellites";
 import type { Capabilities } from "./types";
 
 /**
@@ -220,16 +220,94 @@ export type MountActivityKind =
   | "initializing"    // InitTask
   | "shutting_down"   // ShutdownTask
   | "executing"       // Any other ControllerTask (standby, calibrate, recover, …)
+  // Mount is present but can't act — see `mountReadiness`. Distinct from
+  // "idle" (healthy mount sitting still) and "offline" (controller gone).
+  | "mount_disconnected"
+  | "mount_disabled"
+  | "mount_uninitialized"
   | "offline";
+
+/** The `mountReadiness` kinds — mount present but not in a state to act. */
+export type MountNotReadyKind = Extract<
+  MountActivityKind,
+  "mount_disconnected" | "mount_disabled" | "mount_uninitialized"
+>;
+
+const MOUNT_NOT_READY_KINDS = new Set<MountActivityKind>([
+  "mount_disconnected",
+  "mount_disabled",
+  "mount_uninitialized",
+]);
+
+export function isMountNotReady(kind: MountActivityKind): boolean {
+  return MOUNT_NOT_READY_KINDS.has(kind);
+}
+
+/**
+ * Why the mount can't be trusted to report motion, or null when it can.
+ *
+ * An EntityLease alone isn't enough. The mount *process* can be up and
+ * refreshing its lease while the hardware is disconnected, its command
+ * handlers disabled, or its axes never Init'd. In every one of those cases
+ * SK's `Slewing` / `Tracking` / `AxisRates` / `MountTargetDistance` keywords
+ * still hold whatever the last live session left in KV — `applyOne` pops only
+ * the single prop a null payload names, so an expired lease clears
+ * `EntityLease` and nothing else. Reading motion keywords in these states
+ * republishes a stale status, which is what this gate exists to prevent.
+ */
+export function mountReadiness(
+  mountId: string | null,
+  mountState: Record<string, unknown> | undefined,
+): MountNotReadyKind | null {
+  // Controller declares no mount at all — there's no mount status to report,
+  // stale or otherwise. Callers fall back to plain "idle".
+  if (!mountId) return null;
+  // Configured but absent from `state`, or lease expired: it's gone.
+  if (!mountState) return "mount_disconnected";
+
+  // `Connected` (sensorkit/std/traits.py) — published by every MustConnect
+  // device, including the pwi4 mount's slow-status loop.
+  const connected = (
+    mountState["Connected"] as { is_connected?: boolean } | undefined
+  )?.is_connected;
+  if (connected === false) return "mount_disconnected";
+
+  // Two separate enable signals: `DeviceState.enable_state.enabled`
+  // (sensorkit/core/device.py) is the command-handler gate every device
+  // publishes; `Enabled.is_enabled` is the MustEnable trait keyword, present
+  // only on devices declaring that trait. Either false → won't act on commands.
+  const handlersEnabled = (
+    mountState["DeviceState"] as
+      | { enable_state?: { enabled?: boolean } }
+      | undefined
+  )?.enable_state?.enabled;
+  const traitEnabled = (
+    mountState["Enabled"] as { is_enabled?: boolean } | undefined
+  )?.is_enabled;
+  if (handlersEnabled === false || traitEnabled === false) {
+    return "mount_disabled";
+  }
+
+  // No SK keyword reports "Init'd" directly — Init/Deinit are DeviceCommands,
+  // not state. Axis enablement is the observable proxy: Init brings the axes
+  // up, Deinit/Shutdown drops them. All-axes-disabled therefore reads as
+  // un-Init'd, which is truer than the bare "idle" this used to return.
+  const axEn = mountState["MountAxisEnabled"] as
+    | { axis: { enabled: boolean; axis: string }[] }
+    | undefined;
+  if (axEn && !axEn.axis.some((a) => a.enabled)) return "mount_uninitialized";
+
+  return null;
+}
 
 /**
  * Map SK's ControllerTask.task_type discriminator to one of our kinds.
  * Tasks SK defines today: init, shutdown, standby, calibrate, recover,
  * collect, standard_collect (+ any future subclasses).
  */
-function kindForTaskType(taskType: string): Exclude<
+function kindForTaskType(taskType: string): Extract<
   MountActivityKind,
-  "idle" | "slewing" | "tracking" | "offline"
+  "collecting" | "initializing" | "shutting_down" | "executing"
 > {
   if (taskType === "init") return "initializing";
   if (taskType === "shutdown") return "shutting_down";
@@ -283,6 +361,11 @@ export function useMountActivities(): MountActivity[] {
         out.push(
           m ? 1 : 0,
           m && "EntityLease" in m ? 1 : 0,
+          // Readiness keywords — all low-frequency (published on change /
+          // slow-status cadence), so subscribing to them costs nothing.
+          m?.["Connected"],
+          m?.["DeviceState"],
+          m?.["Enabled"],
           m?.["MountAxisEnabled"],
           m?.["Slewing"],
           m?.["Tracking"],
@@ -308,7 +391,7 @@ export function useMountActivities(): MountActivity[] {
     return () => clearInterval(t);
   }, []);
 
-  return useMemo(() => {
+  const activities = useMemo(() => {
     // Non-reactive snapshot — recomputed when the reactive inputs change or
     // the 1s tick fires, NOT on every telemetry flush.
     const state = useSensorKitStore.getState().state;
@@ -375,13 +458,20 @@ export function useMountActivities(): MountActivity[] {
       const collectFrameKnown =
         typeof ctxFrameNum === "number" && Number.isFinite(ctxFrameNum);
 
-      // Mount state is only meaningful when the mount entity is alive.
-      // A stale Slewing/Tracking keyword left in KV after the mount died
-      // would otherwise poison this controller's pill. Gate on the lease.
-      const mountLive =
-        !!inst.mount && isEntityLive(state, inst.mount);
+      // Mount state is only meaningful when the mount entity is alive AND in a
+      // state where it can actually act. A stale Slewing/Tracking keyword left
+      // in KV after the mount died — or left over from before it was
+      // disconnected/disabled/de-Init'd — would otherwise poison this
+      // controller's pill. Gate on the lease first, then on readiness.
+      const mountLive = !!inst.mount && isEntityLive(state, inst.mount);
+      const liveMountState = mountLive ? state[inst.mount!] : undefined;
+      const readiness = mountReadiness(inst.mount, liveMountState);
 
-      if (!inst.mount || !mountLive || !state[inst.mount]) {
+      if (readiness || !liveMountState) {
+        // An in-flight controller task outranks readiness: it's gated on the
+        // *controller's* own lease, so it's live evidence rather than retained
+        // KV. A running Init task is precisely when the mount is legitimately
+        // still disconnected — "initializing" beats "mount disconnected" there.
         if (taskInfo) {
           const kind = kindForTaskType(taskInfo.taskType);
           return {
@@ -391,18 +481,10 @@ export function useMountActivities(): MountActivity[] {
             busy: true,
           };
         }
-        return { ...base, kind: "idle", detail: null, busy: false };
+        // `readiness` is null here only when the controller declares no mount.
+        return { ...base, kind: readiness ?? "idle", detail: null, busy: false };
       }
-      const mountState = state[inst.mount]!;
-
-      // If all axes disabled → mount is not tracking anything
-      const axEn = mountState["MountAxisEnabled"] as
-        | { axis: { enabled: boolean; axis: string }[] }
-        | undefined;
-      const anyAxisEnabled = axEn ? axEn.axis.some((a) => a.enabled) : true;
-      if (axEn && !anyAxisEnabled) {
-        return { ...base, kind: "idle", detail: null, busy: false };
-      }
+      const mountState = liveMountState;
 
       // Distinguish slewing vs tracking vs idle using position deltas
       // (sim reports velocity=0 even while tracking, so we derive motion from
@@ -522,6 +604,26 @@ export function useMountActivities(): MountActivity[] {
     // getState() above; `tick` re-samples the high-churn keywords at 1Hz.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instruments, activityInputs, mountTargets, tles, tick]);
+
+  // `mountTargets` is client-side intent persisted to localStorage, so a label
+  // set by a previous session outlives that session — and outlives the mount
+  // that was following it. Drop it as soon as the mount can no longer hold a
+  // target, otherwise the old name re-attaches to whatever the mount does next
+  // with nothing on the wire backing it. Joined into a string so the effect
+  // keys on content, not on the array identity `useMemo` mints each recompute.
+  const staleTargetIds = activities
+    .filter((a) => a.kind === "offline" || isMountNotReady(a.kind))
+    .map((a) => a.instrumentId)
+    .join(" ");
+  useEffect(() => {
+    if (!staleTargetIds) return;
+    const store = useSensorKitStore.getState();
+    for (const id of staleTargetIds.split(" ")) {
+      if (store.mountTargets[id]) store.setMountTarget(id, null);
+    }
+  }, [staleTargetIds]);
+
+  return activities;
 }
 
 function describeTracked(
@@ -529,12 +631,12 @@ function describeTracked(
     | { kind: "satellite"; noradId: string }
     | { kind: "icrs"; ra: number; dec: number }
     | undefined,
-  tles: { noradId: string; name: string }[],
+  tles: CatalogRecord[],
 ): string | null {
   if (!tracked) return null;
   if (tracked.kind === "satellite") {
     const tle = tles.find((t) => t.noradId === tracked.noradId);
-    return tle?.name ?? `NORAD ${tracked.noradId}`;
+    return satLabel(tle, tracked.noradId).text;
   }
   return `${tracked.ra.toFixed(2)}\u00b0, ${tracked.dec.toFixed(2)}\u00b0`;
 }
@@ -569,7 +671,7 @@ type SkTarget =
  */
 function targetLabelFromTask(
   target: SkTarget | null | undefined,
-  tles: { noradId: string; name: string }[],
+  tles: CatalogRecord[],
 ): string | null {
   if (!target) return null;
   if (target.target_type === "tle" && target.tle?.line1) {
@@ -578,9 +680,9 @@ function targetLabelFromTask(
     const parts = target.tle.line1.split(/\s+/);
     const norad = parts[1]?.replace(/[A-Za-z]$/, "");
     if (norad) {
-      const match = tles.find((t) => t.noradId === norad);
-      if (match) return match.name;
-      return `TLE \u00b7 ${norad}`;
+      // Not `match.name` \u2014 sources without a line0 store a synthesized
+      // "SAT 12545" placeholder, which would leak into the pill.
+      return satLabel(tles.find((t) => t.noradId === norad), norad).text;
     }
     // Last resort \u2014 line0 sometimes carries the satellite name with a "0 "
     // prefix per TheSky's TLE conventions.
@@ -646,14 +748,18 @@ export function useMountPointings(): InstrumentPointing[] {
     for (const inst of instruments) {
       if (!inst.mount) continue;
       const mountExists = pointingSlices[i] as number;
+      // Axes are nullable on the wire: SensorKit publishes an unknown axis as
+      // NaN, which arrives as JSON null. A half-known pointing is not a usable
+      // pointing — the reticle math and the readout both need both axes — so a
+      // null in either slot collapses the whole pair to null below.
       const raw = pointingSlices[i + 1] as
-        | { right_ascension_hours: number; declination_degrees: number }
+        | { right_ascension_hours: number | null; declination_degrees: number | null }
         | undefined;
       const alt = pointingSlices[i + 2] as
-        | { altitude_degrees: number; azimuth_degrees: number }
+        | { altitude_degrees: number | null; azimuth_degrees: number | null }
         | undefined;
       const dist = pointingSlices[i + 3] as
-        | { distance_arcseconds: number }
+        | { distance_arcseconds: number | null }
         | undefined;
       i += 4;
       if (!mountExists) continue;
@@ -670,12 +776,14 @@ export function useMountPointings(): InstrumentPointing[] {
       out.push({
         instrumentId: inst.id,
         mountId: inst.mount,
-        radec: raw
-          ? { ra: raw.right_ascension_hours * 15, dec: raw.declination_degrees }
-          : null,
-        altaz: alt
-          ? { alt: alt.altitude_degrees, az: alt.azimuth_degrees }
-          : null,
+        radec:
+          raw?.right_ascension_hours != null && raw.declination_degrees != null
+            ? { ra: raw.right_ascension_hours * 15, dec: raw.declination_degrees }
+            : null,
+        altaz:
+          alt?.altitude_degrees != null && alt.azimuth_degrees != null
+            ? { alt: alt.altitude_degrees, az: alt.azimuth_degrees }
+            : null,
         targetDistanceArcsec: dist?.distance_arcseconds ?? null,
         target,
       });

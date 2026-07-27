@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { SatKey } from "./satellites";
 
 export type ViewMode = "sky" | "overhead" | "groundtrack";
 export type StarCatalogChoice = "HR" | "HIP";
@@ -64,7 +65,8 @@ export interface SkyViewStore extends ViewState {
   catalogWidth: number;
 
   /** Currently selected satellite NORAD ID */
-  selectedSatelliteId: string | null;
+  /** Selected catalog object — kind and id, since a NORAD id alone is not unique. */
+  selectedSatellite: SatKey | null;
   /** Currently selected star index in catalog */
   selectedStarIndex: number | null;
   /** Currently selected solar-system body name (e.g. "Sun", "Moon", "Mars"). */
@@ -102,7 +104,7 @@ export interface SkyViewStore extends ViewState {
   toggleGrid: () => void;
   toggleFollowMount: () => void;
   toggleSolarSystem: () => void;
-  selectSatellite: (id: string | null) => void;
+  selectSatellite: (key: SatKey | null) => void;
   selectStar: (index: number | null) => void;
   selectBody: (name: string | null) => void;
   selectHorizonsTarget: (sel: HorizonsSelection | null) => void;
@@ -137,7 +139,7 @@ export const useSkyViewStore = create<SkyViewStore>()(
   followMount: false,
   showSolarSystem: true,
   viewMode: "sky",
-  selectedSatelliteId: null,
+  selectedSatellite: null,
   selectedStarIndex: null,
   selectedBodyName: null,
   selectedHorizonsTarget: null,
@@ -187,19 +189,19 @@ export const useSkyViewStore = create<SkyViewStore>()(
   toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
   toggleFollowMount: () => set((s) => ({ followMount: !s.followMount })),
   toggleSolarSystem: () => set((s) => ({ showSolarSystem: !s.showSolarSystem })),
-  selectSatellite: (id) =>
+  selectSatellite: (key) =>
     set({
-      selectedSatelliteId: id,
+      selectedSatellite: key,
       selectedStarIndex: null,
       selectedBodyName: null,
       selectedHorizonsTarget: null,
       manualTarget: null,
-      detailSheetOpen: id !== null,
+      detailSheetOpen: key !== null,
     }),
   selectStar: (index) =>
     set({
       selectedStarIndex: index,
-      selectedSatelliteId: null,
+      selectedSatellite: null,
       selectedBodyName: null,
       selectedHorizonsTarget: null,
       manualTarget: null,
@@ -208,7 +210,7 @@ export const useSkyViewStore = create<SkyViewStore>()(
   selectBody: (name) =>
     set({
       selectedBodyName: name,
-      selectedSatelliteId: null,
+      selectedSatellite: null,
       selectedStarIndex: null,
       selectedHorizonsTarget: null,
       manualTarget: null,
@@ -217,7 +219,7 @@ export const useSkyViewStore = create<SkyViewStore>()(
   selectHorizonsTarget: (sel) =>
     set({
       selectedHorizonsTarget: sel,
-      selectedSatelliteId: null,
+      selectedSatellite: null,
       selectedStarIndex: null,
       selectedBodyName: null,
       manualTarget: null,
@@ -226,7 +228,7 @@ export const useSkyViewStore = create<SkyViewStore>()(
   setManualTarget: (ra, dec) =>
     set({
       manualTarget: { ra, dec },
-      selectedSatelliteId: null,
+      selectedSatellite: null,
       selectedStarIndex: null,
       selectedBodyName: null,
       selectedHorizonsTarget: null,
@@ -236,7 +238,7 @@ export const useSkyViewStore = create<SkyViewStore>()(
     set((s) => ({
       manualTarget: null,
       detailSheetOpen:
-        s.selectedSatelliteId !== null ||
+        s.selectedSatellite !== null ||
         s.selectedStarIndex !== null ||
         s.selectedBodyName !== null ||
         s.selectedHorizonsTarget !== null
@@ -244,7 +246,7 @@ export const useSkyViewStore = create<SkyViewStore>()(
           : false,
     })),
   setDetailSheetOpen: (open) =>
-    set({ detailSheetOpen: open, selectedSatelliteId: open ? undefined : null }),
+    set({ detailSheetOpen: open, selectedSatellite: open ? undefined : null }),
   setListPanelOpen: (open) => set({ listPanelOpen: open }),
   setOverheadZoom: (zoom) => set({ overheadZoom: zoom }),
   setOverheadCenter: (center) => set({ overheadCenter: center }),

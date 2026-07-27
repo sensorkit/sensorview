@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useRef, useState, useCallback, memo } from "react";
-import { useSatelliteStore, type SatellitePosition, type TLERecord } from "../../../stores/satellites";
+import { SVEpochBadge, SVEpochNotice } from "./SVEpochBadge";
+import {
+  isSV,
+  sameSatKey,
+  satKeyId,
+  satKeyOf,
+  satLabel,
+  useSatelliteStore,
+  type CatalogRecord,
+  type SatellitePosition,
+  type SatKey,
+} from "../../../stores/satellites";
 import { useSkyViewStore, type HorizonsSelection } from "../../../stores/skyview";
 import { useObserver, radecToAltAz, type ObserverLocation } from "../hooks/useObserver";
 import { useStarAltitudes } from "../hooks/useStarAltitudes";
@@ -67,7 +78,7 @@ export function CatalogColumn({ loading = false, catalog }: Props) {
   const filter = useSatelliteStore((s) => s.filter);
 
   const {
-    selectedSatelliteId,
+    selectedSatellite,
     selectedStarIndex,
     selectedBodyName,
     selectedHorizonsTarget,
@@ -97,7 +108,7 @@ export function CatalogColumn({ loading = false, catalog }: Props) {
   }, []);
 
   // Debounced full-catalog search for the satellites tab
-  const [searchResults, setSearchResults] = useState<TLERecord[]>([]);
+  const [searchResults, setSearchResults] = useState<CatalogRecord[]>([]);
   const [searching, setSearching] = useState(false);
   useEffect(() => {
     if (tab !== "satellites" || searchText.length < 2) {
@@ -115,7 +126,13 @@ export function CatalogColumn({ loading = false, catalog }: Props) {
     return () => clearTimeout(t);
   }, [searchText, tab]);
 
-  const tleMap = useMemo(() => new Map(tles.map((t) => [t.noradId, t])), [tles]);
+  // Keyed by satKeyId: a bare NORAD id would collapse an object's TLE and SV
+  // records onto a single entry, and lookups would silently return whichever
+  // was inserted last.
+  const tleMap = useMemo(
+    () => new Map(tles.map((t) => [satKeyId(satKeyOf(t)), t])),
+    [tles],
+  );
 
   const altCmp = (a: { alt: number }, b: { alt: number }) =>
     altSort === "desc" ? b.alt - a.alt : a.alt - b.alt;
@@ -159,15 +176,15 @@ export function CatalogColumn({ loading = false, catalog }: Props) {
     (min == null || value >= min) && (max == null || value <= max);
 
   const { aboveList, risingList } = useMemo(() => {
-    const inRegime = (noradId: string) => {
-      const tle = tleMap.get(noradId);
+    const inRegime = (p: SatellitePosition) => {
+      const tle = tleMap.get(satKeyId(p));
       return filter.orbitRegimes.has(tle?.orbitRegime ?? "OTHER");
     };
     const q = searchText.trim().toLowerCase();
-    const matchText = (noradId: string) => {
+    const matchText = (p: SatellitePosition) => {
       if (!q) return true;
-      const name = tleMap.get(noradId)?.name ?? noradId;
-      return name.toLowerCase().includes(q) || noradId.includes(q);
+      const name = tleMap.get(satKeyId(p))?.name ?? p.noradId;
+      return name.toLowerCase().includes(q) || p.noradId.includes(q);
     };
 
     const altOk = (alt: number) => inMinMax(alt, satFilter.altMin, satFilter.altMax);
@@ -175,8 +192,8 @@ export function CatalogColumn({ loading = false, catalog }: Props) {
       .filter(
         (p) =>
           p.alt > 0 &&
-          inRegime(p.noradId) &&
-          matchText(p.noradId) &&
+          inRegime(p) &&
+          matchText(p) &&
           altOk(p.alt),
       )
       .sort(altCmp)
@@ -187,8 +204,8 @@ export function CatalogColumn({ loading = false, catalog }: Props) {
           p.alt <= 0 &&
           p.riseInMinutes !== null &&
           p.riseInMinutes <= RISE_SOON_MIN &&
-          inRegime(p.noradId) &&
-          matchText(p.noradId) &&
+          inRegime(p) &&
+          matchText(p) &&
           altOk(p.alt),
       )
       .sort((a, b) => (a.riseInMinutes ?? 999) - (b.riseInMinutes ?? 999))
@@ -240,9 +257,9 @@ export function CatalogColumn({ loading = false, catalog }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [starAlts, searchText, starsSort, starFilter]);
 
-  const selectedTle = selectedSatelliteId ? tleMap.get(selectedSatelliteId) : undefined;
-  const selectedSat = selectedSatelliteId
-    ? positions.find((p) => p.noradId === selectedSatelliteId)
+  const selectedTle = selectedSatellite ? tleMap.get(satKeyId(selectedSatellite)) : undefined;
+  const selectedSat = selectedSatellite
+    ? positions.find((p) => sameSatKey(p, selectedSatellite))
     : undefined;
   const selectedStar =
     selectedStarIndex !== null && catalog
@@ -415,11 +432,11 @@ export function CatalogColumn({ loading = false, catalog }: Props) {
             risingList={risingList}
             positions={positions}
             tleMap={tleMap}
-            selectedNoradId={selectedSatelliteId}
+            selectedKey={selectedSatellite}
             onSelectExisting={selectSatellite}
             onSelectFromSearch={(tle) => {
               addTLE(tle);
-              selectSatellite(tle.noradId);
+              selectSatellite(satKeyOf(tle));
             }}
             altSort={altSort}
             onToggleAltSort={toggleAltSort}
@@ -830,25 +847,10 @@ function SatName({
   tle,
   noradId,
 }: {
-  tle: TLERecord | undefined;
+  tle: CatalogRecord | undefined;
   noradId: string;
 }) {
-  const isPlaceholder = !tle?.name || /^SAT\s+\d+$/i.test(tle.name);
-  if (!isPlaceholder) {
-    return (
-      <span
-        style={{
-          color: "var(--color-ink)",
-          fontWeight: 500,
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-      >
-        {tle!.name}
-      </span>
-    );
-  }
+  const label = satLabel(tle, noradId);
   return (
     <span
       className="inline-flex items-baseline"
@@ -857,11 +859,12 @@ function SatName({
         fontWeight: 500,
         gap: 6,
         whiteSpace: "nowrap",
+        overflow: "hidden",
       }}
     >
-      <span>TLE</span>
+      <span>{label.prefix}</span>
       <BulletDot />
-      <span>{noradId}</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label.tail}</span>
     </span>
   );
 }
@@ -894,7 +897,7 @@ function SatelliteRows({
   risingList,
   positions,
   tleMap,
-  selectedNoradId,
+  selectedKey,
   onSelectExisting,
   onSelectFromSearch,
   altSort,
@@ -903,14 +906,14 @@ function SatelliteRows({
   loading: boolean;
   searching: boolean;
   searchText: string;
-  searchResults: TLERecord[];
+  searchResults: CatalogRecord[];
   aboveList: SatellitePosition[];
   risingList: SatellitePosition[];
   positions: SatellitePosition[];
-  tleMap: Map<string, TLERecord>;
-  selectedNoradId: string | null;
-  onSelectExisting: (id: string) => void;
-  onSelectFromSearch: (tle: TLERecord) => void;
+  tleMap: Map<string, CatalogRecord>;
+  selectedKey: SatKey | null;
+  onSelectExisting: (key: SatKey) => void;
+  onSelectFromSearch: (tle: CatalogRecord) => void;
   altSort: "desc" | "asc";
   onToggleAltSort: () => void;
 }) {
@@ -925,11 +928,11 @@ function SatelliteRows({
         <>
           {aboveList.map((sat) => (
             <SatRow
-              key={sat.noradId}
+              key={satKeyId(sat)}
               sat={sat}
-              tle={tleMap.get(sat.noradId)}
-              selected={sat.noradId === selectedNoradId}
-              onClick={() => onSelectExisting(sat.noradId)}
+              tle={tleMap.get(satKeyId(sat))}
+              selected={sameSatKey(sat, selectedKey)}
+              onClick={() => onSelectExisting(sat)}
             />
           ))}
         </>
@@ -943,11 +946,11 @@ function SatelliteRows({
           />
           {risingList.map((sat) => (
             <SatRow
-              key={sat.noradId}
+              key={satKeyId(sat)}
               sat={sat}
-              tle={tleMap.get(sat.noradId)}
-              selected={sat.noradId === selectedNoradId}
-              onClick={() => onSelectExisting(sat.noradId)}
+              tle={tleMap.get(satKeyId(sat))}
+              selected={sameSatKey(sat, selectedKey)}
+              onClick={() => onSelectExisting(sat)}
             />
           ))}
         </>
@@ -960,12 +963,14 @@ function SatelliteRows({
             tone="brass"
           />
           {searchResults.slice(0, 50).map((tle) => {
-            const pos = positions.find((p) => p.noradId === tle.noradId);
+            const key = satKeyOf(tle);
+            const pos = positions.find((p) => sameSatKey(p, key));
             return (
               <SatRow
-                key={tle.noradId}
+                key={satKeyId(key)}
                 sat={
                   pos ?? {
+                    kind: key.kind,
                     noradId: tle.noradId,
                     ra: 0, dec: 0, alt: -90, az: 0, isVisible: false,
                     range: 0, velocity: 0, riseInMinutes: null,
@@ -973,7 +978,7 @@ function SatelliteRows({
                   }
                 }
                 tle={tle}
-                selected={tle.noradId === selectedNoradId}
+                selected={sameSatKey(key, selectedKey)}
                 onClick={() => onSelectFromSearch(tle)}
               />
             );
@@ -1459,7 +1464,6 @@ function HorizonsPanel({
       )}
       {!loading && lookup && !lookup.resolved && candidates.length > 0 && (
         <>
-          <RowMessage>Multiple matches — pick one</RowMessage>
           {candidates.map((c) => (
             <HorizonsResultRow
               key={c.command}
@@ -1648,7 +1652,7 @@ function SatRow({
   onClick,
 }: {
   sat: SatellitePosition;
-  tle: TLERecord | undefined;
+  tle: CatalogRecord | undefined;
   selected: boolean;
   onClick: () => void;
 }) {
@@ -1685,6 +1689,9 @@ function SatRow({
       <div className="flex items-center gap-[7px] min-w-0">
         <Dot color={color} size={6} />
         <SatName tle={tle} noradId={sat.noradId} />
+        {isSV(tle) && (
+          <SVEpochBadge epoch={tle.epoch} orbitRegime={tle.orbitRegime} />
+        )}
       </div>
       <span
         className="mono text-right"
@@ -1721,13 +1728,12 @@ function SatelliteDetail({
   onClose,
 }: {
   sat: SatellitePosition;
-  tle: TLERecord | undefined;
+  tle: CatalogRecord | undefined;
   onClose: () => void;
 }) {
   const regime = tle?.orbitRegime ?? "OTHER";
   const color = regimeColor(regime);
-  const isPlaceholder = !tle?.name || /^SAT\s+\d+$/i.test(tle.name);
-  const name = isPlaceholder ? `TLE · ${sat.noradId}` : tle!.name;
+  const name = satLabel(tle, sat.noradId).text;
 
   const data: [string, string][] = [
     ["Alt", `${sat.alt.toFixed(2)}°`],
@@ -1768,6 +1774,13 @@ function SatelliteDetail({
         </>
       }
     >
+      {isSV(tle) && (
+        <SVEpochNotice
+          epoch={tle.epoch}
+          orbitRegime={tle.orbitRegime}
+          palette="paper"
+        />
+      )}
       <DataGrid rows={data} />
       <ActionButtons target={target} palette="paper" />
     </DetailFrame>

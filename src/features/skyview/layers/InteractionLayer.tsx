@@ -3,7 +3,12 @@ import type { GeoProjection } from "d3-geo";
 import type { SatellitePosition } from "../../../stores/satellites";
 import { type StarCatalog, getStarLabel } from "../catalog/stars";
 import { useSkyViewStore } from "../../../stores/skyview";
-import { useSatelliteStore } from "../../../stores/satellites";
+import {
+  sameSatKey,
+  satKeyOf,
+  satLabel,
+  useSatelliteStore,
+} from "../../../stores/satellites";
 import { celestialToScreen } from "../projection";
 
 interface Props {
@@ -23,20 +28,19 @@ export function InteractionLayer({
   height,
   onMouseMove,
 }: Props) {
-  const selectedSatId = useSkyViewStore((s) => s.selectedSatelliteId);
+  const selectedSatId = useSkyViewStore((s) => s.selectedSatellite);
   const selectedStarIdx = useSkyViewStore((s) => s.selectedStarIndex);
   const tles = useSatelliteStore((s) => s.tles);
 
   // Selected satellite screen position
   const satScreen = useMemo(() => {
     if (!selectedSatId) return null;
-    const sat = positions.find((p) => p.noradId === selectedSatId);
+    const sat = positions.find((p) => sameSatKey(p, selectedSatId));
     if (!sat) return null;
     const pos = celestialToScreen(projection, sat.ra, sat.dec);
     if (!pos) return null;
-    const tle = tles.find((t) => t.noradId === selectedSatId);
-    const isPlaceholder = !tle?.name || /^SAT\s+\d+$/i.test(tle.name);
-    const name = isPlaceholder ? `TLE · ${selectedSatId}` : tle!.name;
+    const tle = tles.find((t) => sameSatKey(satKeyOf(t), selectedSatId));
+    const name = satLabel(tle, selectedSatId.noradId).text;
     return { x: pos[0], y: pos[1], name, sat };
   }, [positions, selectedSatId, projection, tles]);
 

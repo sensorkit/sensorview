@@ -44,7 +44,7 @@ export function SkyCanvas({
 
   const {
     centerRA, centerDec, zoom, limitingMagnitude, showConstellations,
-    showSolarSystem, selectedSatelliteId, selectedBodyName, selectedHorizonsTarget,
+    showSolarSystem, selectedSatellite, selectedBodyName, selectedHorizonsTarget,
     manualTarget, setCenter, setZoom, setManualTarget,
   } = useSkyViewStore();
 
@@ -60,7 +60,7 @@ export function SkyCanvas({
   );
 
   // Orbital track for selected satellite
-  const track = useSatelliteTrack(selectedSatelliteId, observer);
+  const track = useSatelliteTrack(selectedSatellite, observer);
 
   // Adaptive magnitude cap. Targets ~2000 visible stars at any zoom by
   // scaling the limit with `log10(zoom)` — derived from HIP density:
@@ -275,9 +275,9 @@ export function SkyCanvas({
     if (!ctx) return;
     renderSatellites(
       ctx, size.width, size.height,
-      filteredPositions, tles, projection, selectedSatelliteId, true, track,
+      filteredPositions, tles, projection, selectedSatellite, true, track,
     );
-  }, [filteredPositions, tles, projection, selectedSatelliteId, size, getCtx, track]);
+  }, [filteredPositions, tles, projection, selectedSatellite, size, getCtx, track]);
 
   // Solar-system bodies — draws beneath satellite layer
   useEffect(() => {

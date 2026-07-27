@@ -1,6 +1,13 @@
 import { geoPath, type GeoProjection } from "d3-geo";
 import { geoToScreen } from "../projection";
-import type { SatellitePosition, TLERecord } from "../../../stores/satellites";
+import {
+  sameSatKey,
+  satKeyId,
+  satKeyOf,
+  type CatalogRecord,
+  type SatellitePosition,
+  type SatKey,
+} from "../../../stores/satellites";
 import type { GroundTrackPoint } from "../hooks/useGroundTrack";
 import { regimeColor } from "./regimeColors";
 
@@ -29,14 +36,14 @@ export function renderGroundTrackSatellites(
   width: number,
   height: number,
   positions: SatellitePosition[],
-  tles: TLERecord[],
+  tles: CatalogRecord[],
   projection: GeoProjection,
-  selectedId: string | null,
+  selectedId: SatKey | null,
   groundTrack: GroundTrackPoint[],
 ) {
   ctx.clearRect(0, 0, width, height);
 
-  const tleMap = new Map(tles.map((t) => [t.noradId, t]));
+  const tleMap = new Map(tles.map((t) => [satKeyId(satKeyOf(t)), t]));
   const pathGenerator = geoPath(projection, ctx);
 
   // Draw ground track for selected satellite using d3-geo path (handles wrapping)
@@ -70,7 +77,7 @@ export function renderGroundTrackSatellites(
   // Draw non-selected satellites
   for (const pos of positions) {
     if (pos.lat == null || pos.lon == null) continue;
-    if (pos.noradId === selectedId) continue;
+    if (selectedId && sameSatKey(pos, selectedId)) continue;
 
     const pt = geoToScreen(projection, pos.lon, pos.lat);
     if (!pt) continue;
@@ -93,12 +100,12 @@ export function renderGroundTrackSatellites(
 
   // Draw selected satellite on top
   if (selectedId) {
-    const pos = positions.find((p) => p.noradId === selectedId);
+    const pos = positions.find((p) => sameSatKey(p, selectedId));
     if (pos?.lat != null && pos?.lon != null) {
       const pt = geoToScreen(projection, pos.lon, pos.lat);
       if (pt) {
-        const name = tleMap.get(selectedId)?.name ?? selectedId;
-        const regime = tleMap.get(selectedId)?.orbitRegime ?? "OTHER";
+        const name = tleMap.get(satKeyId(selectedId))?.name ?? selectedId.noradId;
+        const regime = tleMap.get(satKeyId(selectedId))?.orbitRegime ?? "OTHER";
         const color = regimeColor(regime);
 
         // Glow

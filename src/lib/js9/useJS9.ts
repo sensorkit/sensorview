@@ -11,8 +11,17 @@ declare global {
   interface Window {
     JS9?: JS9Global;
     JS9Prefs?: unknown;
+    /** astroem's emscripten module. Its `options.error` is the sink cfitsio
+     *  decode failures route to (bound once at JS9 init), so we override it to
+     *  trap bad-FITS errors — see JS9Viewer's error trap. */
+    Astroem?: { options?: { error?: JS9ErrorFn } };
   }
 }
+
+/** JS9's error callback. astroem invokes it as `(msg, err, true)` for fatal
+ *  decode failures (the trailing `true` is the throw flag); JS9 itself calls it
+ *  with fewer args for non-fatal warnings (e.g. a missing WCS). */
+export type JS9ErrorFn = (msg: unknown, err?: unknown, fatal?: boolean) => void;
 
 /** A JS9 image handle, as passed to a Load `onload` callback. */
 export interface JS9Image {
@@ -42,6 +51,14 @@ export interface JS9Global {
   globalOpts?: Record<string, unknown>;
   /** Per-image default options new frames inherit (scale, scaleclipping, …). */
   imageOpts?: Record<string, unknown>;
+  /** JS9's global error reporter. Overridable — we wrap it to swallow a failed
+   *  image load's modal + spinner and surface the message inline instead. */
+  error?: JS9ErrorFn;
+  /** Toggle JS9's loading spinner. We force it off when a load fails, since
+   *  JS9's own error path doesn't always clear it on the astroem sink. */
+  waiting?: (state: boolean, which?: unknown) => void;
+  /** FITS handler options; `fits.options.error` is astroem's fatal-error sink. */
+  fits?: { options?: { error?: JS9ErrorFn } };
 }
 
 // Resolve against Vite's base so these work both in browser dev (base "/") and

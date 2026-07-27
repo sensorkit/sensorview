@@ -583,20 +583,25 @@ function DirectActionRow({
 
 // === Device-specific bodies ===
 
+// Pointing axes are nullable on the wire even when the keyword itself is
+// present: SensorKit publishes an unknown axis as NaN, which serializes to JSON
+// null (a dome that failed to home reports az=nan, alt=0.0). These fields are
+// reached through an unchecked `as` cast, so declaring them non-nullable buys no
+// safety — it just hides the null from the compiler until `.toFixed()` throws.
 interface RADecPointing {
-  right_ascension_hours: number;
-  declination_degrees: number;
+  right_ascension_hours: number | null;
+  declination_degrees: number | null;
   reference_frame?: string;
 }
 interface AltAzPointing {
-  altitude_degrees: number;
-  azimuth_degrees: number;
+  altitude_degrees: number | null;
+  azimuth_degrees: number | null;
 }
 interface AxisEnabled {
   axis: { enabled: boolean; axis: string }[];
 }
 interface AxisDistance {
-  axis: { distance_arcseconds: number; axis: string }[];
+  axis: { distance_arcseconds: number | null; axis: string }[];
 }
 
 function MountBody({
@@ -618,19 +623,25 @@ function MountBody({
   const azErr = dist?.axis.find((a) => a.axis === "azimuth")?.distance_arcseconds;
   const altErr = dist?.axis.find((a) => a.axis === "altitude")?.distance_arcseconds;
 
+  // SensorKit reports RA in hours; the display is degrees. Convert only once we
+  // know the value is real — `null * 15` is 0, which would render a confident
+  // "0.0000°" for an axis the mount can't actually report.
+  const raDegrees =
+    radec?.right_ascension_hours == null ? null : radec.right_ascension_hours * 15;
+
   return (
     <>
       <Metrics>
       {radec && (
         <>
-          <Metric label="RA" value={`${(radec.right_ascension_hours * 15).toFixed(4)}\u00b0`} />
-          <Metric label="Dec" value={`${radec.declination_degrees.toFixed(4)}\u00b0`} />
+          <Metric label="RA" value={fmtNum(raDegrees, 4)} />
+          <Metric label="Dec" value={fmtNum(radec.declination_degrees, 4)} />
         </>
       )}
       {altaz && (
         <>
-          <Metric label="Alt" value={`${altaz.altitude_degrees.toFixed(2)}\u00b0`} />
-          <Metric label="Az" value={`${altaz.azimuth_degrees.toFixed(2)}\u00b0`} />
+          <Metric label="Alt" value={fmtNum(altaz.altitude_degrees, 2)} />
+          <Metric label="Az" value={fmtNum(altaz.azimuth_degrees, 2)} />
         </>
       )}
       {axEn && (
@@ -643,10 +654,13 @@ function MountBody({
           }
         />
       )}
-      {dist && azErr !== undefined && altErr !== undefined && (
+      {/* `!= null` rather than `!== undefined`: a present-but-null axis passes an
+          undefined check and then throws on .toFixed(). Still hidden when neither
+          axis reports at all — that's absent telemetry, not an unknown reading. */}
+      {dist && (azErr != null || altErr != null) && (
         <Metric
           label="Err"
-          value={`${azErr.toFixed(2)}″ / ${altErr.toFixed(2)}″`}
+          value={`${fmtNum(azErr, 2, "″")} / ${fmtNum(altErr, 2, "″")}`}
         />
       )}
       </Metrics>
@@ -1068,8 +1082,8 @@ function EnclosureBody({
         )}
         {altaz && (
           <>
-            <Metric label="Alt" value={`${altaz.altitude_degrees.toFixed(2)}°`} />
-            <Metric label="Az" value={`${altaz.azimuth_degrees.toFixed(2)}°`} />
+            <Metric label="Alt" value={fmtNum(altaz.altitude_degrees, 2)} />
+            <Metric label="Az" value={fmtNum(altaz.azimuth_degrees, 2)} />
           </>
         )}
       </Metrics>
@@ -1183,6 +1197,22 @@ function Metric({ label, value }: { label: string; value: string }) {
       <span className="text-text-bright font-mono truncate">{value}</span>
     </div>
   );
+}
+
+/**
+ * Format a nullable wire number as a fixed-precision reading, rendering an
+ * unknown value as "—" (matching the Axes metric's existing convention).
+ *
+ * We show the dash rather than dropping the row: a dome that doesn't know its
+ * own azimuth is operationally significant, and silently omitting "Az" would
+ * read as "no azimuth telemetry" instead of "azimuth unknown".
+ */
+function fmtNum(
+  v: number | null | undefined,
+  digits: number,
+  suffix = "°",
+): string {
+  return v == null ? "—" : `${v.toFixed(digits)}${suffix}`;
 }
 
 function Pill({

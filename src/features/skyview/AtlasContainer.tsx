@@ -8,7 +8,7 @@ import { useObserver, zenithRADec } from "./hooks/useObserver";
 import { useStarAltitudes } from "./hooks/useStarAltitudes";
 import { MountActivityIndicator } from "./ui/MountActivityIndicator";
 import { useSkyViewStore } from "../../stores/skyview";
-import { useSatelliteStore } from "../../stores/satellites";
+import { satKeyId, satKeyOf, useSatelliteStore } from "../../stores/satellites";
 import { fetchTLECatalog, getTLEStatus, refreshTLECache } from "../../lib/api-client/tle";
 import { LeftRail } from "./ui/LeftRail";
 import { CatalogColumn } from "./ui/CatalogColumn";
@@ -100,8 +100,10 @@ export function AtlasContainer() {
   // tick. `tles` is a stable store reference between refreshes (setPositions only
   // touches `positions`), so this memo holds and the 10Hz filters below just do
   // O(1) lookups instead of rebuilding a 32k-entry Map twice per tick.
+  // Keyed by satKeyId, not a bare NORAD id: an object can hold both a TLE and
+  // a state vector, and keying on the id alone would collapse them.
   const tleMap = useMemo(
-    () => new Map(tles.map((t) => [t.noradId, t])),
+    () => new Map(tles.map((t) => [satKeyId(satKeyOf(t)), t])),
     [tles],
   );
 
@@ -111,7 +113,7 @@ export function AtlasContainer() {
       const isAbove = p.alt > 0;
       const isRisingSoon = p.riseInMinutes !== null && p.riseInMinutes <= 15;
       if (!isAbove && !isRisingSoon) return false;
-      const tle = tleMap.get(p.noradId);
+      const tle = tleMap.get(satKeyId(p));
       const regime = tle?.orbitRegime ?? "OTHER";
       if (!filter.orbitRegimes.has(regime)) return false;
       return true;
@@ -125,7 +127,7 @@ export function AtlasContainer() {
     // computing it here would be incomplete AND unused — skip it.
     if (viewMode === "sky") return [];
     return positions.filter((p) => {
-      const tle = tleMap.get(p.noradId);
+      const tle = tleMap.get(satKeyId(p));
       const regime = tle?.orbitRegime ?? "OTHER";
       return filter.orbitRegimes.has(regime);
     });

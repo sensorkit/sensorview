@@ -6,6 +6,7 @@ import {
   refreshTLESources,
   spaceTrackLogout,
   updateTLESourceConfig,
+  uploadLocalSVFile,
   uploadLocalTLEFile,
   type TLESourceId,
   type TLESourceStatus,
@@ -24,8 +25,18 @@ type BusyKey = TLESourceId | "all";
 const SOURCE_LABELS: Record<TLESourceId, { name: string; description: string }> = {
   spacebook: { name: "Spacebook", description: "Free TLE catalog by COMSPOC" },
   spacetrack: { name: "Space-Track", description: "USSPACECOM catalog (requires login)" },
-  local: { name: "Local file", description: "Upload a .tle or .3le file" },
   url: { name: "Custom URL", description: "Fetch TLEs from a custom endpoint" },
+  local: { name: "Local TLE(s)", description: "Upload a .tle or .3le file" },
+  localsv: { name: "Local SV(s)", description: "Upload a .sv or .json file" },
+};
+
+/** Source ids whose row offers a file upload rather than a fetch. */
+const UPLOAD_SOURCES = new Set<TLESourceId>(["local", "localsv"]);
+
+/** File-picker filter per upload source. */
+const UPLOAD_ACCEPT: Partial<Record<TLESourceId, string>> = {
+  local: ".tle,.3le,.txt",
+  localsv: ".sv,.json",
 };
 
 /**
@@ -45,6 +56,10 @@ export function TLESettings() {
   const [drag, setDrag] = useState<{ id: TLESourceId; order: TLESourceId[] } | null>(null);
   const rowRefs = useRef(new Map<TLESourceId, HTMLDivElement>());
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Which source opened the file picker. A ref, not state: `accept` has to be
+  // right at the moment click() opens the dialog, before a re-render could
+  // apply it.
+  const pickerTargetRef = useRef<TLESourceId | null>(null);
 
   const loadAll = useCallback(async () => {
     try {
@@ -116,11 +131,15 @@ export function TLESettings() {
 
   const onFileChosen = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    const target = pickerTargetRef.current;
     e.target.value = ""; // allow re-selecting the same file
-    if (!file) return;
-    run("local", async () => {
+    if (!file || !target) return;
+    run(target, async () => {
       const text = await file.text();
-      const res = await uploadLocalTLEFile(file.name, text);
+      const res =
+        target === "localsv"
+          ? await uploadLocalSVFile(file.name, text)
+          : await uploadLocalTLEFile(file.name, text);
       syncFromSources(res.sources);
     });
   };
@@ -278,7 +297,13 @@ export function TLESettings() {
                 onRefresh={() => refreshOne(id)}
                 onSignIn={() => setLoginOpen(true)}
                 onSignOut={signOut}
-                onChooseFile={() => fileInputRef.current?.click()}
+                onChooseFile={() => {
+                  pickerTargetRef.current = id;
+                  const input = fileInputRef.current;
+                  if (!input) return;
+                  input.accept = UPLOAD_ACCEPT[id] ?? "";
+                  input.click();
+                }}
                 urlValue={urlValue}
                 onUrlChange={setUrlDraft}
                 onFetchUrl={fetchUrl}
@@ -288,10 +313,11 @@ export function TLESettings() {
         )}
       </div>
 
+      {/* One picker shared by both upload rows; `accept` is set imperatively
+          per row in onChooseFile. */}
       <input
         ref={fileInputRef}
         type="file"
-        accept=".tle,.3le,.txt"
         onChange={onFileChosen}
         className="hidden"
       />
@@ -419,7 +445,7 @@ function SourceRow({
               Sign in...
             </RowButton>
           ))}
-        {source.id === "local" && (
+        {UPLOAD_SOURCES.has(source.id) && (
           <RowButton onClick={onChooseFile} disabled={busy}>
             {busy ? "Loading..." : source.filename ? "Replace..." : "Choose file..."}
           </RowButton>
@@ -450,6 +476,19 @@ function statusLine(s: TLESourceStatus): string {
         (s.format ? ` · ${s.format.toUpperCase()}` : "") +
         ` · loaded ${formatAge(s.cacheAgeHours)}`
       );
+    case "localsv": {
+      if (!s.filename) return "no file loaded";
+      // Epoch age, not upload age: a file uploaded a minute ago can hold a
+      // state vector from last month, and it's the epoch that decides whether
+      // the propagated position means anything.
+      const epochAge = s.oldestEpoch
+        ? (Date.now() - new Date(s.oldestEpoch).getTime()) / 3_600_000
+        : null;
+      return (
+        `${s.filename} · ${sats ?? "0 sats"}` +
+        (epochAge == null ? "" : ` · epoch ${formatAge(epochAge)}`)
+      );
+    }
     case "url":
       if (!sats) return "";
       return (

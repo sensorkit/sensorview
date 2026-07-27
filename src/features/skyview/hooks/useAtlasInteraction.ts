@@ -1,7 +1,11 @@
 import { useCallback, useMemo } from "react";
 import { quadtree, type Quadtree } from "d3-quadtree";
 import type { GeoProjection } from "d3-geo";
-import type { SatellitePosition } from "../../../stores/satellites";
+import {
+  parseSatKeyId,
+  satKeyId,
+  type SatellitePosition,
+} from "../../../stores/satellites";
 import type { StarCatalog } from "../catalog/stars";
 import { celestialToScreen } from "../projection";
 import { useSkyViewStore } from "../../../stores/skyview";
@@ -13,7 +17,8 @@ const TAP_RADIUS_MOBILE = 24;
 interface ScreenItem {
   x: number;
   y: number;
-  id: string; // noradId for sats, "star:INDEX" for stars, "body:NAME" for bodies
+  /** "tle:NORAD"/"sv:NORAD" for catalog objects, "star:INDEX", "body:NAME". */
+  id: string;
 }
 
 export function useAtlasInteraction(
@@ -46,7 +51,7 @@ export function useAtlasInteraction(
     for (const sat of positions) {
       const pos = celestialToScreen(projection, sat.ra, sat.dec);
       if (!pos) continue;
-      items.push({ x: pos[0], y: pos[1], id: sat.noradId });
+      items.push({ x: pos[0], y: pos[1], id: satKeyId(sat) });
     }
 
     // Stars: always clickable, capped by magnitude. Catalog is sorted
@@ -96,7 +101,7 @@ export function useAtlasInteraction(
       } else if (nearest.id.startsWith("body:")) {
         selectBody(nearest.id.slice(5));
       } else {
-        selectSatellite(nearest.id);
+        selectSatellite(parseSatKeyId(nearest.id));
       }
     },
     [findNearest, selectSatellite, selectStar, selectBody, clearManualTarget],

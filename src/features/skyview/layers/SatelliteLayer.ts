@@ -1,5 +1,12 @@
 import type { GeoProjection } from "d3-geo";
-import type { SatellitePosition, TLERecord } from "../../../stores/satellites";
+import {
+  sameSatKey,
+  satKeyId,
+  satKeyOf,
+  type CatalogRecord,
+  type SatellitePosition,
+  type SatKey,
+} from "../../../stores/satellites";
 import type { TrackPoint } from "../hooks/useSatelliteTrack";
 import { celestialToScreen } from "../projection";
 import { regimeColor } from "./regimeColors";
@@ -16,19 +23,19 @@ export function renderSatellites(
   width: number,
   height: number,
   positions: SatellitePosition[],
-  tles: TLERecord[],
+  tles: CatalogRecord[],
   projection: GeoProjection,
-  selectedId: string | null,
+  selectedId: SatKey | null,
   showBelowHorizon: boolean,
   track: TrackPoint[],
 ): void {
   ctx.clearRect(0, 0, width, height);
 
-  const tleMap = new Map(tles.map((t) => [t.noradId, t]));
+  const tleMap = new Map(tles.map((t) => [satKeyId(satKeyOf(t)), t]));
 
   // Draw orbital track first (behind satellites)
   if (track.length > 1 && selectedId) {
-    const regime = tleMap.get(selectedId)?.orbitRegime;
+    const regime = tleMap.get(satKeyId(selectedId))?.orbitRegime;
     drawTrack(ctx, width, height, track, projection, regimeColor(regime));
   }
 
@@ -42,8 +49,8 @@ export function renderSatellites(
     const [x, y] = pos;
     if (x < -20 || x > width + 20 || y < -20 || y > height + 20) continue;
 
-    const isSelected = sat.noradId === selectedId;
-    const regime = tleMap.get(sat.noradId)?.orbitRegime;
+    const isSelected = sameSatKey(sat, selectedId);
+    const regime = tleMap.get(satKeyId(sat))?.orbitRegime;
     const color = sat.alt < 0 ? "#555555" : regimeColor(regime);
     const s = isSelected ? SAT_SIZE * 1.4 : SAT_SIZE;
 

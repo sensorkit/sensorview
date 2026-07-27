@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  isMountNotReady,
   useMountActivities,
   useMountPointings,
   type MountActivity,
@@ -164,7 +165,7 @@ function InstrumentPanel({
           {activity.instrumentId}
         </span>
         <span className="ml-auto text-[10px] uppercase tracking-wide text-text-dim">
-          {activity.kind}
+          {activity.kind.replace(/_/g, " ")}
         </span>
       </div>
 
@@ -241,6 +242,9 @@ function StatusDot({ kind }: { kind: MountActivity["kind"] }) {
   // three pulse to indicate live activity. Init/Shutdown/generic-executing
   // pulse amber so they're visually distinct from a real collect but still
   // read as "doing something." Idle = solid gray; offline = solid red.
+  // The mount-not-ready kinds are solid amber — the *absence* of a pulse is
+  // what separates them from the amber busy states: nothing is happening and
+  // nothing will until the mount is connected/enabled/Init'd.
   const cls =
     kind === "idle"
       ? "bg-gray-500"
@@ -254,7 +258,9 @@ function StatusDot({ kind }: { kind: MountActivity["kind"] }) {
                 kind === "shutting_down" ||
                 kind === "executing"
               ? "bg-amber-400 animate-pulse"
-              : "bg-red-400";
+              : isMountNotReady(kind)
+                ? "bg-amber-400"
+                : "bg-red-400";
   return <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cls}`} />;
 }
 
@@ -283,5 +289,14 @@ function describeActivity(a: MountActivity, frameIndex: number | null): string {
       const m = a.frameTotal ?? "?";
       return `${a.instrumentId} · collecting ${n}/${m}`;
     }
+    // Mount present but unable to act. Each maps to a specific SK signal
+    // (Connected / DeviceState.enable_state / MountAxisEnabled) rather than
+    // collapsing into "idle", which would imply a healthy mount sitting still.
+    case "mount_disconnected":
+      return `${a.instrumentId} · mount disconnected`;
+    case "mount_disabled":
+      return `${a.instrumentId} · mount disabled`;
+    case "mount_uninitialized":
+      return `${a.instrumentId} · mount uninitialized`;
   }
 }

@@ -30,6 +30,26 @@ export function AlmanacStrip() {
     return () => window.clearInterval(id);
   }, []);
 
+  // Scrub position along the strip, as a 0..1 fraction of its width, plus the
+  // input that produced it. Null when nothing is pointing at the timeline.
+  // Touch reads out above the strip because a fingertip covers all 22 px of it.
+  const [scrub, setScrub] = useState<Scrub | null>(null);
+
+  // Safety net for the touch readout. The strip captures the pointer so it
+  // normally gets its own pointerup, but capture can fail (see below) — and
+  // then a finger lifted off the strip would leave the readout stuck on
+  // screen with no way to dismiss it. Window listeners always fire.
+  useEffect(() => {
+    if (!scrub?.touch) return;
+    const clear = () => setScrub(null);
+    window.addEventListener("pointerup", clear);
+    window.addEventListener("pointercancel", clear);
+    return () => {
+      window.removeEventListener("pointerup", clear);
+      window.removeEventListener("pointercancel", clear);
+    };
+  }, [scrub?.touch]);
+
   if (!almanac) {
     // First render before the deferred computation completes — show the
     // empty paper strip so layout doesn't jump when data arrives.
@@ -76,6 +96,16 @@ export function AlmanacStrip() {
   // center: see derivation in PR description.
   const offsetPct = (1 / (2 * innerScale) - nowFrac) * 100;
 
+  // Inverse of the transform above: strip fraction -> instant on the timeline.
+  // Derived from x_inner = f*W - translate, so the window fraction under the
+  // cursor is (f - 0.5)/innerScale + nowFrac.
+  const scrubTime = !scrub
+    ? null
+    : new Date(
+        windowStart.getTime() +
+          windowMs * ((scrub.frac - 0.5) / innerScale + nowFrac),
+      );
+
   return (
     <div
       className="h-full w-full flex flex-col"
@@ -88,7 +118,18 @@ export function AlmanacStrip() {
           toFrac={toFrac}
           offsetPct={offsetPct}
           innerScale={innerScale}
-          overlay={<NowIndicator />}
+          onScrub={setScrub}
+          overlay={
+            <>
+              <NowIndicator />
+              {scrub && scrubTime && (
+                <ScrubLine frac={scrub.frac} touch={scrub.touch} />
+              )}
+              {scrub && scrubTime && !scrub.touch && (
+                <ScrubChipInline frac={scrub.frac} time={scrubTime} />
+              )}
+            </>
+          }
         >
           {almanac.moonUpSegments.map(([a, b], i) => {
             const fa = toFrac(a);
@@ -147,6 +188,12 @@ export function AlmanacStrip() {
             />
           ))}
         </TwilightStrip>
+        {/* Touch readout floats above the strip, outside its overflow-hidden
+            box, so a fingertip doesn't cover it. It overlays the header row
+            while scrubbing — still inside the almanac panel, so nothing clips. */}
+        {scrub?.touch && scrubTime && (
+          <ScrubChipFloating frac={scrub.frac} time={scrubTime} />
+        )}
       </div>
       {/* Hour tick labels scroll with the timeline in their own row, so the
           AtlasContainer's overflow-hidden can't clip them. */}
@@ -299,6 +346,7 @@ function TwilightStrip({
   innerScale,
   children,
   overlay,
+  onScrub,
 }: {
   almanac: AlmanacDay;
   toFrac: (d: Date | null) => number | null;
@@ -306,7 +354,17 @@ function TwilightStrip({
   innerScale: number;
   children: React.ReactNode;
   overlay?: React.ReactNode;
+  onScrub?: (scrub: Scrub | null) => void;
 }) {
+  const report = (e: React.PointerEvent) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    if (box.width <= 0) return;
+    const f = (e.clientX - box.left) / box.width;
+    onScrub?.({
+      frac: Math.max(0, Math.min(1, f)),
+      touch: e.pointerType === "touch",
+    });
+  };
   const band = (segments: [Date, Date][], bg: string, key: string) =>
     segments.map(([from, to], i) => {
       const a = toFrac(from);
@@ -336,6 +394,30 @@ function TwilightStrip({
         border: "1px solid rgba(199,184,143,0.6)",
         overflow: "hidden",
         background: "var(--color-night)",
+        cursor: onScrub ? "crosshair" : undefined,
+        // Claim horizontal drags for scrubbing but leave vertical alone, so a
+        // flick that starts on the strip still scrolls the compact layout.
+        touchAction: onScrub ? "pan-y" : undefined,
+      }}
+      onPointerDown={(e) => {
+        if (e.pointerType === "mouse") return;
+        // The strip is 22 px tall — capture so the readout survives a finger
+        // that drifts off it mid-drag. Capture is a nicety, not a
+        // precondition: if the pointer is already gone this throws, and the
+        // readout should still appear.
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          /* no active pointer to capture */
+        }
+        report(e);
+      }}
+      onPointerMove={report}
+      onPointerUp={() => onScrub?.(null)}
+      onPointerCancel={() => onScrub?.(null)}
+      onPointerLeave={(e) => {
+        // Touch ends via up/cancel; leave fires mid-drag and would clear early.
+        if (e.pointerType !== "touch") onScrub?.(null);
       }}
     >
       <div
@@ -385,6 +467,107 @@ function EdgeMarker({
         border: "1px solid var(--color-brass-dim)",
       }}
     />
+  );
+}
+
+/** Where the pointer is on the strip, and whether a finger put it there. */
+type Scrub = { frac: number; touch: boolean };
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** Readout text: local clock time first (matching the hour ticks), then UTC. */
+function clockLabel(time: Date) {
+  return {
+    local: `${pad2(time.getHours())}:${pad2(time.getMinutes())}`,
+    utc: `${pad2(time.getUTCHours())}:${pad2(time.getUTCMinutes())}Z`,
+  };
+}
+
+const CHIP_BASE: React.CSSProperties = {
+  background: "rgba(28,25,20,0.88)",
+  border: "1px solid var(--color-brass-dim)",
+  borderRadius: 2,
+  whiteSpace: "nowrap",
+  color: "var(--color-paper)",
+  pointerEvents: "none",
+};
+
+/** Guide line at the scrub position. Thicker under a finger. */
+function ScrubLine({ frac, touch }: { frac: number; touch: boolean }) {
+  return (
+    <div
+      className="absolute"
+      style={{
+        left: `${frac * 100}%`,
+        top: 0,
+        bottom: 0,
+        width: touch ? 2 : 1,
+        marginLeft: touch ? -1 : 0,
+        background: "var(--color-paper)",
+        opacity: touch ? 0.9 : 0.7,
+        pointerEvents: "none",
+      }}
+    />
+  );
+}
+
+/**
+ * Mouse readout, inside the 22 px strip beside the guide line — so neither the
+ * atlas root's overflow-hidden nor the header row can clip it. Flips to the
+ * other side of the line past the midpoint to stay in bounds.
+ */
+function ScrubChipInline({ frac, time }: { frac: number; time: Date }) {
+  const { local, utc } = clockLabel(time);
+  const flip = frac > 0.5;
+  return (
+    <div
+      className="mono absolute"
+      style={{
+        ...CHIP_BASE,
+        left: `${frac * 100}%`,
+        top: "50%",
+        marginTop: -8,
+        transform: flip ? "translateX(calc(-100% - 5px))" : "translateX(5px)",
+        padding: "1px 5px",
+        fontSize: 9.5,
+        lineHeight: "12px",
+      }}
+    >
+      {local} <span style={{ opacity: 0.55 }}>{utc}</span>
+    </div>
+  );
+}
+
+/**
+ * Touch readout, floated above the strip and out of the fingertip's shadow.
+ * Anchoring switches to the strip edges near either end rather than centring on
+ * the touch, which keeps the chip in view without measuring its width.
+ */
+function ScrubChipFloating({ frac, time }: { frac: number; time: Date }) {
+  const { local, utc } = clockLabel(time);
+  const edge: React.CSSProperties =
+    frac < 0.2
+      ? { left: 0 }
+      : frac > 0.8
+        ? { right: 0 }
+        : { left: `${frac * 100}%`, transform: "translateX(-50%)" };
+
+  return (
+    <div
+      className="mono absolute"
+      style={{
+        ...CHIP_BASE,
+        ...edge,
+        bottom: "calc(100% + 4px)",
+        padding: "2px 7px",
+        fontSize: 11,
+        lineHeight: "14px",
+        boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
+        zIndex: 2,
+      }}
+    >
+      {local} <span style={{ opacity: 0.6 }}>{utc}</span>
+    </div>
   );
 }
 
