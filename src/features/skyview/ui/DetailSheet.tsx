@@ -512,7 +512,11 @@ export function ActionButtons({
     // track via ICRS — SK's FollowTarget on an ICRSTarget produces sidereal-
     // rate tracking that keeps the inertial position centered.
     if (orbitalTarget && satRecord) {
-      setMountTarget(active.id, { kind: "satellite", noradId: satRecord.noradId });
+      setMountTarget(active.id, {
+        kind: "satellite",
+        noradId: satRecord.noradId,
+        elementSet: satKeyOf(satRecord).kind,
+      });
       runAction("Track", () =>
         sendDeviceCommand(active.mount!, followTarget(orbitalTarget)),
       );
@@ -529,7 +533,12 @@ export function ActionButtons({
 
   const onCollect = (preset: CollectPreset) => {
     if (!active) return;
-    if (satRecord) setMountTarget(active.id, { kind: "satellite", noradId: satRecord.noradId });
+    if (satRecord)
+      setMountTarget(active.id, {
+        kind: "satellite",
+        noradId: satRecord.noradId,
+        elementSet: satKeyOf(satRecord).kind,
+      });
     else setMountTarget(active.id, { kind: "icrs", ra: target.ra, dec: target.dec });
     const programName = useBackends.getState().programName.trim() || "sensorview";
     const rawTargetId =

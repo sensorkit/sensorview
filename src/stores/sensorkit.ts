@@ -11,6 +11,7 @@ import type {
   SKRecord,
   SitePosition,
 } from "../lib/sensorkit-client/types";
+import type { ElementSetKind } from "./satellites";
 
 /** Nested key for cached state: `path.join("/")` → prop → payload. */
 export type StateMap = Record<string, Record<string, unknown>>;
@@ -27,7 +28,18 @@ export type LatestProduct = {
 
 /** What a given instrument has been commanded to follow. */
 export type TrackedMountTarget =
-  | { kind: "satellite"; noradId: string }
+  | {
+      kind: "satellite";
+      noradId: string;
+      /**
+       * Which element set was commanded. A NORAD id alone is ambiguous once an
+       * object holds both a TLE and a state vector — the two are separate rows
+       * that disagree about where the object is. Absent on entries persisted
+       * before state-vector support, which could only have been TLEs, so an
+       * absent value reads as "tle" and no store migration is needed.
+       */
+      elementSet?: ElementSetKind;
+    }
   | { kind: "icrs"; ra: number; dec: number };
 
 export interface SensorKitStore {

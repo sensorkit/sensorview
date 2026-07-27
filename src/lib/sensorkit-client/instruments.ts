@@ -5,8 +5,17 @@ import {
   useSensorKitSlice,
   useSensorKitStore,
   type StateMap,
+  type TrackedMountTarget,
 } from "../../stores/sensorkit";
-import { satLabel, useSatelliteStore, type CatalogRecord } from "../../stores/satellites";
+import {
+  isTLE,
+  sameSatKey,
+  satKeyOf,
+  satLabel,
+  useSatelliteStore,
+  type CatalogRecord,
+  type SatKey,
+} from "../../stores/satellites";
 import type { Capabilities } from "./types";
 
 /**
@@ -626,17 +635,28 @@ export function useMountActivities(): MountActivity[] {
   return activities;
 }
 
+/**
+ * SatKey for a commanded satellite target. Entries persisted before
+ * state-vector support carry no `elementSet` and were necessarily TLEs.
+ */
+function trackedSatKey(tracked: {
+  noradId: string;
+  elementSet?: SatKey["kind"];
+}): SatKey {
+  return { kind: tracked.elementSet ?? "tle", noradId: tracked.noradId };
+}
+
 function describeTracked(
-  tracked:
-    | { kind: "satellite"; noradId: string }
-    | { kind: "icrs"; ra: number; dec: number }
-    | undefined,
+  tracked: TrackedMountTarget | undefined,
   tles: CatalogRecord[],
 ): string | null {
   if (!tracked) return null;
   if (tracked.kind === "satellite") {
-    const tle = tles.find((t) => t.noradId === tracked.noradId);
-    return satLabel(tle, tracked.noradId).text;
+    // Matched on element set as well as id: picking whichever record happens
+    // to sort first would label a tracked TLE "SV · X" (or the reverse).
+    const key = trackedSatKey(tracked);
+    const record = tles.find((t) => sameSatKey(satKeyOf(t), key));
+    return satLabel(record, tracked.noradId).text;
   }
   return `${tracked.ra.toFixed(2)}\u00b0, ${tracked.dec.toFixed(2)}\u00b0`;
 }
@@ -682,7 +702,12 @@ function targetLabelFromTask(
     if (norad) {
       // Not `match.name` \u2014 sources without a line0 store a synthesized
       // "SAT 12545" placeholder, which would leak into the pill.
-      return satLabel(tles.find((t) => t.noradId === norad), norad).text;
+      // Restricted to TLE records: the task's own target_type says a TLE was
+      // commanded, so a same-id state vector must not supply the label.
+      return satLabel(
+        tles.find((t) => isTLE(t) && t.noradId === norad),
+        norad,
+      ).text;
     }
     // Last resort \u2014 line0 sometimes carries the satellite name with a "0 "
     // prefix per TheSky's TLE conventions.
@@ -768,9 +793,12 @@ export function useMountPointings(): InstrumentPointing[] {
       const tracked = mountTargets[inst.id];
       let target: InstrumentPointing["target"] = null;
       if (tracked?.kind === "satellite") {
-        const sat = positions.find((p) => p.noradId === tracked.noradId);
-        const tle = tles.find((t) => t.noradId === tracked.noradId);
-        if (sat) target = { rangeKm: sat.range, regime: tle?.orbitRegime };
+        // Element-set-matched: a TLE and a state vector for the same object
+        // give different ranges, so the cone must read the one commanded.
+        const key = trackedSatKey(tracked);
+        const sat = positions.find((p) => sameSatKey(p, key));
+        const record = tles.find((t) => sameSatKey(satKeyOf(t), key));
+        if (sat) target = { rangeKm: sat.range, regime: record?.orbitRegime };
       }
 
       out.push({
