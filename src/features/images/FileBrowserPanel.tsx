@@ -1,27 +1,45 @@
-import { useState } from "react";
-import type { ProductEntry } from "../../lib/sensorkit-client/types";
+import { memo, useState } from "react";
 
-type ProductsMap = Record<string, Record<string, ProductEntry>>;
+/** One file row, already labelled and formatted by ImagesPage. */
+export interface BrowserRow {
+  productId: string;
+  /** Primary text: a chosen header keyword's value, or the filename. */
+  label: string;
+  /** Dim second line — register time and size. */
+  detail: string;
+}
 
-/** Newest first: by file register time, falling back to the name. */
-function sortKey(e: ProductEntry): string {
-  return e.registerTime ?? e.productId;
+export interface BrowserGroup {
+  controllerId: string;
+  rows: BrowserRow[];
+  /** Products known for this controller before search/filter. */
+  total: number;
+  /** Matching rows dropped by the display cap (0 when everything is shown). */
+  capped: number;
 }
 
 interface Props {
-  products: ProductsMap;
+  groups: BrowserGroup[];
   selected: { controllerId: string; productId: string } | null;
   onSelect: (controllerId: string, productId: string) => void;
 }
 
 /**
- * Left-hand file browser. Groups are the `controller_id` values discovered from
- * product records in the store (the top-level folders under the serve root);
- * each is a collapsible section listing its files.
+ * Left-hand file browser. Groups are the `controller_id` values discovered
+ * from the REST listing and the live firehose (the top-level folders under the
+ * serve root); each is a collapsible section listing its files.
+ *
+ * Rows carry a header-derived label rather than the raw product id, because
+ * the ids are UUIDs — see ImagesPage's `labelKeyword`. Memoized: the Images
+ * tab re-renders on every firehose flush, and this list can run to thousands
+ * of rows.
  */
-export function FileBrowserPanel({ products, selected, onSelect }: Props) {
+export const FileBrowserPanel = memo(function FileBrowserPanel({
+  groups,
+  selected,
+  onSelect,
+}: Props) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const groups = Object.keys(products).sort();
 
   if (groups.length === 0) {
     return null;
@@ -31,10 +49,8 @@ export function FileBrowserPanel({ products, selected, onSelect }: Props) {
 
   return (
     <div className="py-1 text-xs select-none">
-      {groups.map((g) => {
-        const files = Object.values(products[g] ?? {}).sort((a, b) =>
-          sortKey(b).localeCompare(sortKey(a)),
-        );
+      {groups.map((group) => {
+        const { controllerId: g, rows } = group;
         const isCollapsed = collapsed[g];
         return (
           <div key={g}>
@@ -46,34 +62,60 @@ export function FileBrowserPanel({ products, selected, onSelect }: Props) {
                 {isCollapsed ? "▶" : "▼"}
               </span>
               <span className="truncate uppercase tracking-wide">{g}</span>
-              <span className="ml-auto text-[10px] text-text-dim/60">{files.length}</span>
+              {/* Matched, not rendered: the display cap is reported at the end
+                  of the list, and counting rendered rows here would read as a
+                  filter narrowing the group when nothing is filtered. */}
+              <span className="ml-auto text-[10px] text-text-dim/60">
+                {rows.length + group.capped === group.total
+                  ? group.total
+                  : `${rows.length + group.capped} / ${group.total}`}
+              </span>
             </button>
             {!isCollapsed && (
-              <ul>
-                {files.map((f) => {
-                  const isSel =
-                    selected?.controllerId === g && selected?.productId === f.productId;
-                  return (
-                    <li key={f.productId}>
-                      <button
-                        onClick={() => onSelect(g, f.productId)}
-                        title={f.productId}
-                        className={`block w-full truncate py-0.5 pointer-coarse:py-2 pl-6 pr-2 text-left font-mono text-[11px] transition-colors ${
-                          isSel
-                            ? "bg-blue-500/20 text-blue-200"
-                            : "text-text-dim hover:bg-white/5 hover:text-text-bright"
-                        }`}
-                      >
-                        {f.productId}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
+              <>
+                <ul>
+                  {rows.map((row) => {
+                    const isSel =
+                      selected?.controllerId === g && selected?.productId === row.productId;
+                    return (
+                      <li key={row.productId}>
+                        <button
+                          onClick={() => onSelect(g, row.productId)}
+                          title={row.productId}
+                          className={`block w-full py-0.5 pointer-coarse:py-2 pl-6 pr-2 text-left transition-colors ${
+                            isSel
+                              ? "bg-blue-500/20 text-blue-200"
+                              : "text-text-dim hover:bg-white/5 hover:text-text-bright"
+                          }`}
+                        >
+                          <span className="block truncate font-mono text-[11px]">{row.label}</span>
+                          {row.detail !== "" && (
+                            <span
+                              className={`block truncate font-mono text-[9.5px] ${
+                                isSel ? "text-blue-300/70" : "text-text-dim/60"
+                              }`}
+                            >
+                              {row.detail}
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {rows.length === 0 && (
+                  <p className="px-6 py-1 text-[10.5px] text-text-dim/70">No matching files</p>
+                )}
+                {group.capped > 0 && (
+                  <p className="px-6 py-1 text-[10.5px] text-text-dim/70">
+                    +{group.capped} more match — narrow the search to see them
+                  </p>
+                )}
+              </>
             )}
           </div>
         );
       })}
     </div>
   );
-}
+});

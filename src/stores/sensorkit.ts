@@ -8,6 +8,7 @@ import type {
   EntityListing,
   ProductEntry,
   ProductInfo,
+  ProductMetadata,
   SKRecord,
   SitePosition,
 } from "../lib/sensorkit-client/types";
@@ -49,6 +50,19 @@ export interface SensorKitStore {
   state: StateMap;
   /** FITS products served by SK, keyed by controller. Fed live by the firehose. */
   products: ProductsMap;
+  /**
+   * Deep product history per controller, from the REST listing. Kept separate
+   * from `products` because the live map is trimmed to the newest N on every
+   * firehose batch (see MAX_LIVE_PRODUCTS_PER_CONTROLLER) — merging the full
+   * catalog there would be silently discarded by the next arriving product.
+   */
+  productCatalog: ProductsMap;
+  /**
+   * FITS headers fetched from `/metadata`, keyed controller → product. Their
+   * own slice rather than a field on ProductEntry so the header index survives
+   * the live map's trim and doesn't ride the hot firehose path.
+   */
+  productHeaders: Record<string, Record<string, ProductMetadata>>;
   /** Newest product across all controllers — drives the latest-image pop-out. null until one arrives. */
   latestProduct: LatestProduct | null;
   /** User-chosen controller (instrument). null = auto (first online). */
@@ -69,6 +83,17 @@ export interface SensorKitStore {
   applyRecords: (records: SKRecord[]) => void;
   /** Merge backlog products (from the REST listing) without dropping a fetched header. */
   applyProductListing: (controllerId: string, infos: ProductInfo[]) => void;
+  /** Replace a controller's deep catalog with a full REST listing. */
+  setProductCatalog: (controllerId: string, infos: ProductInfo[]) => void;
+  /**
+   * Merge a batch of fetched FITS headers. Batched deliberately: the indexer
+   * fetches hundreds of products, and one `set()` per header would notify
+   * every subscriber hundreds of times.
+   */
+  mergeProductHeaders: (
+    controllerId: string,
+    headers: Record<string, ProductMetadata>,
+  ) => void;
   resetState: () => void;
   setSelectedInstrumentId: (id: string | null) => void;
   setMountTarget: (instrumentId: string, target: TrackedMountTarget | null) => void;
@@ -226,6 +251,8 @@ export const useSensorKitStore = create<SensorKitStore>()(
       entities: [],
       state: {},
       products: {},
+      productCatalog: {},
+      productHeaders: {},
       latestProduct: null,
       selectedInstrumentId: null,
       mountTargets: {},
@@ -367,7 +394,52 @@ export const useSensorKitStore = create<SensorKitStore>()(
           return { products, latestProduct: latestFromProducts(products) };
         }),
 
-      resetState: () => set({ state: {}, entities: [], products: {}, latestProduct: null }),
+      setProductCatalog: (controllerId, infos) =>
+        set((s) => {
+          const prev = s.productCatalog[controllerId];
+          const next: Record<string, ProductEntry> = {};
+          for (const info of infos) {
+            next[info.product_id] = {
+              productId: info.product_id,
+              registerTime: info.register_time,
+              dataSize: info.data_size,
+            };
+          }
+          // The listing is refetched on reconnect and controller switch; skip
+          // the commit when nothing moved so the Images tab doesn't re-render
+          // (and re-run its facet build) for an identical catalog.
+          if (prev) {
+            const prevIds = Object.keys(prev);
+            if (
+              prevIds.length === infos.length &&
+              prevIds.every((id) => next[id]?.registerTime === prev[id]?.registerTime)
+            ) {
+              return {};
+            }
+          }
+          return { productCatalog: { ...s.productCatalog, [controllerId]: next } };
+        }),
+
+      mergeProductHeaders: (controllerId, headers) =>
+        set((s) => {
+          if (Object.keys(headers).length === 0) return {};
+          return {
+            productHeaders: {
+              ...s.productHeaders,
+              [controllerId]: { ...s.productHeaders[controllerId], ...headers },
+            },
+          };
+        }),
+
+      resetState: () =>
+        set({
+          state: {},
+          entities: [],
+          products: {},
+          productCatalog: {},
+          productHeaders: {},
+          latestProduct: null,
+        }),
 
       setSelectedInstrumentId: (id) => set({ selectedInstrumentId: id }),
 
