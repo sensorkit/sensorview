@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 
 /** One file row, already labelled and formatted by ImagesPage. */
 export interface BrowserRow {
@@ -40,6 +40,53 @@ export const FileBrowserPanel = memo(function FileBrowserPanel({
   onSelect,
 }: Props) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const selectedRef = useRef<HTMLButtonElement | null>(null);
+
+  /** Every rendered row, in visual order. Collapsed groups are skipped so
+   *  arrow-key navigation matches what's actually on screen. */
+  const visible = useMemo(() => {
+    const out: { controllerId: string; productId: string }[] = [];
+    for (const g of groups) {
+      if (collapsed[g.controllerId]) continue;
+      for (const r of g.rows) out.push({ controllerId: g.controllerId, productId: r.productId });
+    }
+    return out;
+  }, [groups, collapsed]);
+
+  // Up/Down step through the list once something is open. Bound on the
+  // document rather than the list, because focus is usually on the viewer (or
+  // nowhere) after a click — the buttons themselves never keep it for long.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      // Never steal the arrows from a field the user is editing — the search
+      // box, the filter panel's number inputs, the keyword picker.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (!selected) return;
+
+      const i = visible.findIndex(
+        (v) => v.controllerId === selected.controllerId && v.productId === selected.productId,
+      );
+      // Open file filtered out of the list (or past the display cap): leave the
+      // arrows alone rather than jumping somewhere the user didn't ask for.
+      if (i === -1) return;
+
+      const next = e.key === "ArrowDown" ? i + 1 : i - 1;
+      if (next < 0 || next >= visible.length) return;
+      e.preventDefault();
+      onSelect(visible[next]!.controllerId, visible[next]!.productId);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [visible, selected, onSelect]);
+
+  // Keep the open row on screen when the selection moves by keyboard (or when
+  // auto-follow opens a new arrival). `nearest` won't scroll if it's visible.
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
 
   if (groups.length === 0) {
     return null;
@@ -80,6 +127,7 @@ export const FileBrowserPanel = memo(function FileBrowserPanel({
                     return (
                       <li key={row.productId}>
                         <button
+                          ref={isSel ? selectedRef : undefined}
                           onClick={() => onSelect(g, row.productId)}
                           title={row.productId}
                           className={`block w-full py-0.5 pointer-coarse:py-2 pl-6 pr-2 text-left transition-colors ${

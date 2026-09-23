@@ -17,6 +17,8 @@ export interface UIPanelsStore {
   imageFilterControllerId: string | null;
   /** Images tab: auto-open the newest image off the firehose as it arrives. Off by default. */
   imagesFollowLatest: boolean;
+  /** Images tab: height in px of the Calibrate card below the FITS header. */
+  imagesCalibHeight: number;
   /** Log panel font size in px. */
   logFontSize: number;
   /** Whether log lines word-wrap; false = no wrap (horizontal scroll). */
@@ -30,6 +32,7 @@ export interface UIPanelsStore {
   setImagePaneHeight: (h: number) => void;
   setImageFilterControllerId: (id: string | null) => void;
   setImagesFollowLatest: (on: boolean) => void;
+  setImagesCalibHeight: (h: number) => void;
   setLogFontSize: (n: number) => void;
   toggleLogWrap: () => void;
 }
@@ -43,6 +46,7 @@ export const useUIPanelsStore = create<UIPanelsStore>()(
       imagePaneHeight: 300,
       imageFilterControllerId: null,
       imagesFollowLatest: false,
+      imagesCalibHeight: 128,
       logFontSize: 10.5,
       logWrap: true,
 
@@ -54,6 +58,7 @@ export const useUIPanelsStore = create<UIPanelsStore>()(
       setImagePaneHeight: (h) => set({ imagePaneHeight: h }),
       setImageFilterControllerId: (id) => set({ imageFilterControllerId: id }),
       setImagesFollowLatest: (on) => set({ imagesFollowLatest: on }),
+      setImagesCalibHeight: (h) => set({ imagesCalibHeight: h }),
       setLogFontSize: (n) => set({ logFontSize: n }),
       toggleLogWrap: () => set((s) => ({ logWrap: !s.logWrap })),
     }),

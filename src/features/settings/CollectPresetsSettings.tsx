@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   type CollectPreset,
   type FrameType,
   useCollectPresetsStore,
 } from "../../stores/collectPresets";
+import { useSensorKitStore } from "../../stores/sensorkit";
 
 const FRAME_TYPES: FrameType[] = ["light", "dark", "bias", "flat"];
 
@@ -141,6 +142,7 @@ function PresetSummary({ preset }: { preset: CollectPreset }) {
     parts.push(`bin ${preset.binning_x ?? 1}×${preset.binning_y ?? 1}`);
   }
   if (preset.gain != null) parts.push(`gain ${preset.gain}`);
+  if (preset.readout_mode != null) parts.push(`readout ${preset.readout_mode}`);
   if (preset.frame_type) parts.push(preset.frame_type);
   if (preset.filter_name) parts.push(`filter ${preset.filter_name}`);
   if (preset.sidereal_frames?.length) {
@@ -194,14 +196,10 @@ function PresetEditor({
       </Field>
       <Field label="Frame type">
         <select
-          value={preset.frame_type ?? ""}
-          onChange={(e) => {
-            const v = e.target.value;
-            onPatch({ frame_type: v ? (v as FrameType) : null });
-          }}
+          value={preset.frame_type ?? "light"}
+          onChange={(e) => onPatch({ frame_type: e.target.value as FrameType })}
           className="bg-black/40 border border-panel-border rounded px-2 py-1 text-xs text-text-bright font-mono"
         >
-          <option value="">(default)</option>
           {FRAME_TYPES.map((t) => (
             <option key={t} value={t}>
               {t}
@@ -233,6 +231,17 @@ function PresetEditor({
           className="bg-black/40 border border-panel-border rounded px-2 py-1 text-xs text-text-bright font-mono"
         />
       </Field>
+      <Field label="Readout mode">
+        <input
+          type="number"
+          min="0"
+          step="1"
+          value={preset.readout_mode ?? ""}
+          placeholder="default"
+          onChange={(e) => onPatch({ readout_mode: nullableInt(e.target.value) })}
+          className="bg-black/40 border border-panel-border rounded px-2 py-1 text-xs text-text-bright font-mono"
+        />
+      </Field>
       <Field label="Gain">
         <input
           type="number"
@@ -243,17 +252,7 @@ function PresetEditor({
           className="bg-black/40 border border-panel-border rounded px-2 py-1 text-xs text-text-bright font-mono"
         />
       </Field>
-      <Field label="Filter name">
-        <input
-          type="text"
-          value={preset.filter_name ?? ""}
-          placeholder="(none)"
-          onChange={(e) =>
-            onPatch({ filter_name: e.target.value ? e.target.value : null })
-          }
-          className="bg-black/40 border border-panel-border rounded px-2 py-1 text-xs text-text-bright font-mono"
-        />
-      </Field>
+      <FilterField preset={preset} onPatch={onPatch} />
       <Field label="Sidereal frames">
         <div className="flex items-center gap-1">
           <input
@@ -275,6 +274,106 @@ function PresetEditor({
         </div>
       </Field>
     </div>
+  );
+}
+
+const INPUT_CLS =
+  "bg-black/40 border border-panel-border rounded px-2 py-1 text-xs text-text-bright font-mono";
+
+/**
+ * Filter wheels currently reporting filters, read live from the firehose store
+ * (`state[wheelId].Filters.filters`) — the same source the Devices tab uses.
+ * Keyed by device id; only wheels that actually publish a non-empty filter list
+ * appear, so the dropdowns never offer an empty wheel.
+ */
+function useFilterWheels(): { deviceId: string; names: string[] }[] {
+  const state = useSensorKitStore((s) => s.state);
+  return useMemo(() => {
+    const wheels: { deviceId: string; names: string[] }[] = [];
+    for (const [deviceId, ds] of Object.entries(state)) {
+      const f = (ds as Record<string, unknown>)["Filters"] as
+        | { filters?: { name: string }[] }
+        | undefined;
+      const names = f?.filters?.map((x) => x.name).filter(Boolean) ?? [];
+      if (names.length) wheels.push({ deviceId, names });
+    }
+    return wheels.sort((a, b) => a.deviceId.localeCompare(b.deviceId));
+  }, [state]);
+}
+
+/**
+ * Filter picker: a wheel dropdown that drives a filter dropdown. The preset only
+ * stores the filter *name* (all the collect sends — the wheel is decided by
+ * whichever instrument runs the collect), so the wheel select is transient UI to
+ * choose which list of names to browse. Falls back to a free-text input when no
+ * wheel is online, so a name can still be set or kept while instruments are down.
+ */
+function FilterField({
+  preset,
+  onPatch,
+}: {
+  preset: CollectPreset;
+  onPatch: (p: Partial<Omit<CollectPreset, "id">>) => void;
+}) {
+  const wheels = useFilterWheels();
+
+  // No wheel reporting filters (Settings open with no instrument online, or none
+  // configured) — free text so a name can still be set/kept.
+  if (wheels.length === 0) {
+    return (
+      <Field label="Filter">
+        <input
+          type="text"
+          value={preset.filter_name ?? ""}
+          placeholder="default"
+          onChange={(e) => onPatch({ filter_name: e.target.value || null })}
+          className={INPUT_CLS}
+        />
+      </Field>
+    );
+  }
+
+  // A stored name no online wheel lists (preset built against another wheel) is
+  // kept as a standalone option so editing never silently drops it.
+  const orphan =
+    preset.filter_name && !wheels.some((w) => w.names.includes(preset.filter_name!))
+      ? preset.filter_name
+      : null;
+
+  // One dropdown, always. With multiple wheels the filters are grouped under
+  // their wheel via <optgroup>, so the wheel is visible right where you pick the
+  // filter — no separate select to overlook. With a single wheel the grouping is
+  // redundant, so the list is flat and the wheel shows as a caption underneath.
+  const single = wheels.length === 1;
+  return (
+    <Field label="Filter">
+      <select
+        value={preset.filter_name ?? ""}
+        onChange={(e) => onPatch({ filter_name: e.target.value || null })}
+        className={INPUT_CLS}
+      >
+        <option value="">default</option>
+        {orphan && <option value={orphan}>{orphan}</option>}
+        {single
+          ? wheels[0]!.names.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))
+          : wheels.map((w) => (
+              <optgroup key={w.deviceId} label={w.deviceId}>
+                {w.names.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+      </select>
+      {single && (
+        <span className="text-[10px] text-text-dim font-mono">{wheels[0]!.deviceId}</span>
+      )}
+    </Field>
   );
 }
 

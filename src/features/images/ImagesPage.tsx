@@ -2,11 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { JS9Viewer, type ImageSource } from "./JS9Viewer";
 import { FileBrowserPanel, type BrowserGroup, type BrowserRow } from "./FileBrowserPanel";
 import { HeaderPanel } from "./HeaderPanel";
+import { CalibratePanel, type CalibrateEntry, type CalibrateInfo } from "./CalibratePanel";
 import { ImageFilterBar } from "./ImageFilterBar";
 import { useHeaderIndex, type ProductRef } from "./useHeaderIndex";
 import { useResizableWidth } from "./useResizableWidth";
+import { usePaneResize } from "../panels/usePaneResize";
+import { findDark, findFlat, type CalCandidate, type MatchResult } from "./calMatch";
 import { Toggle } from "../settings/Toggle";
 import { useSensorKitStore } from "../../stores/sensorkit";
+import { useEntities } from "../../lib/sensorkit-client/instruments";
 import { useUIPanelsStore } from "../../stores/uiPanels";
 import {
   ProductListingNotReady,
@@ -63,6 +67,20 @@ function sortKey(e: ProductEntry): string {
   return e.registerTime ?? e.productId;
 }
 
+/** `<ISO>` → coarse "3h old" for the applied dark frame's age. */
+function humanAge(iso: string | undefined): string {
+  if (!iso) return "";
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s old`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m old`;
+  const h = Math.round(m / 6) / 10;
+  if (h < 24) return `${h}h old`;
+  return `${Math.round(h / 2.4) / 10}d old`;
+}
+
 export function ImagesPage() {
   const [source, setSource] = useState<ImageSource | null>(null);
   const [open, setOpen] = useState<{ controllerId: string; productId: string } | null>(null);
@@ -81,13 +99,41 @@ export function ImagesPage() {
   const productHeaders = useSensorKitStore((s) => s.productHeaders);
   const setProductCatalog = useSensorKitStore((s) => s.setProductCatalog);
   const mergeProductHeaders = useSensorKitStore((s) => s.mergeProductHeaders);
-  const entities = useSensorKitStore((s) => s.entities);
+  // Live listing so a controller coming online after an SK restart appears in
+  // the picker without a manual refresh (only name/online are read here).
+  const entities = useEntities();
   const selectedInstrumentId = useSensorKitStore((s) => s.selectedInstrumentId);
   const connection = useSensorKitStore((s) => s.connection);
   const latestProduct = useSensorKitStore((s) => s.latestProduct);
 
   const followLatest = useUIPanelsStore((s) => s.imagesFollowLatest);
   const setFollowLatest = useUIPanelsStore((s) => s.setImagesFollowLatest);
+
+  // Calibrate card: dark/flat toggles + its resizable height.
+  const [applyDark, setApplyDark] = useState(false);
+  const [applyFlat, setApplyFlat] = useState(false);
+  const calibHeight = useUIPanelsStore((s) => s.imagesCalibHeight);
+  const setCalibHeight = useUIPanelsStore((s) => s.setImagesCalibHeight);
+
+  // Measure the Calibrate card's content so the drag can't shrink it below what
+  // it holds. A ref-callback (re)attaches the observer across layout swaps.
+  const [calibMin, setCalibMin] = useState(0);
+  const calibRoRef = useRef<ResizeObserver | null>(null);
+  const calibContentRef = useCallback((el: HTMLDivElement | null) => {
+    calibRoRef.current?.disconnect();
+    if (!el) return;
+    const ro = new ResizeObserver(() => setCalibMin(el.scrollHeight));
+    ro.observe(el);
+    calibRoRef.current = ro;
+    setCalibMin(el.scrollHeight);
+  }, []);
+  const CALIB_MAX = 400;
+  const calibClamped = Math.min(CALIB_MAX, Math.max(calibMin, calibHeight));
+  const calibGrip = usePaneResize("y", calibClamped, setCalibHeight, {
+    min: calibMin,
+    max: CALIB_MAX,
+    invert: true,
+  });
 
   const controllers = useMemo(
     () => entities.filter((e) => e.entity_type === "controller"),
@@ -202,6 +248,96 @@ export function ImagesPage() {
   }, [entriesByGroup, productHeaders]);
 
   const facets = useMemo(() => buildFacets([...cardsById.values()]), [cardsById]);
+
+  // Calibration: find the dark/flat to apply to the open frame. Candidates are
+  // every product whose header is already indexed — the same in-memory index the
+  // browser uses, so no extra fetches. Only built while a toggle is on.
+  const subjectCards = open
+    ? cardsById.get(`${open.controllerId}/${open.productId}`)
+    : undefined;
+  const calCandidates = useMemo(() => {
+    if (!applyDark && !applyFlat) return null;
+    const out: CalCandidate[] = [];
+    for (const [cid, list] of entriesByGroup) {
+      for (const e of list) {
+        const cards = cardsById.get(`${cid}/${e.productId}`);
+        if (cards) out.push({ controllerId: cid, productId: e.productId, registerTime: e.registerTime, cards });
+      }
+    }
+    return out;
+  }, [applyDark, applyFlat, entriesByGroup, cardsById]);
+
+  const darkResult = useMemo(
+    () =>
+      applyDark && open && subjectCards && calCandidates
+        ? findDark(subjectCards, open.productId, calCandidates)
+        : null,
+    [applyDark, open, subjectCards, calCandidates],
+  );
+  const flatResult = useMemo(
+    () =>
+      applyFlat && open && subjectCards && calCandidates
+        ? findFlat(subjectCards, open.productId, calCandidates)
+        : null,
+    [applyFlat, open, subjectCards, calCandidates],
+  );
+
+  const darkMatch = darkResult?.match ?? null;
+  const flatMatch = flatResult?.match ?? null;
+  const darkUrl =
+    applyDark && darkMatch ? productDataUrl(darkMatch.controllerId, darkMatch.productId) : null;
+  const flatUrl =
+    applyFlat && flatMatch ? productDataUrl(flatMatch.controllerId, flatMatch.productId) : null;
+
+  // Build one Calibrate row: filename+age when matched, else a status note.
+  const calEntry = (
+    label: string,
+    title: string,
+    enabled: boolean,
+    onToggle: (on: boolean) => void,
+    result: MatchResult | null,
+    kind: string,
+  ): CalibrateEntry => {
+    let matched: CalibrateInfo | null = null;
+    let note: string | null = null;
+    if (enabled) {
+      if (!open) note = "Open a frame to calibrate";
+      else if (!result) note = "Indexing header…";
+      else if (result.match)
+        matched = { filename: result.match.productId, age: humanAge(result.match.registerTime) };
+      else
+        note =
+          result.reason === "missing-fields"
+            ? "Frame missing required header fields"
+            : `No matching ${kind} frame`;
+    }
+    return { label, title, enabled, onToggle, matched, note };
+  };
+
+  const calEntries: CalibrateEntry[] = [
+    calEntry(
+      "APPLY DARK",
+      "Subtract the most recent matching dark frame from the displayed image",
+      applyDark,
+      setApplyDark,
+      darkResult,
+      "dark",
+    ),
+    calEntry(
+      "APPLY FLAT",
+      "Divide the displayed image by the most recent matching flat frame",
+      applyFlat,
+      setApplyFlat,
+      flatResult,
+      "flat",
+    ),
+  ];
+
+  const calib = (
+    <div ref={calibContentRef}>
+      <CalibratePanel entries={calEntries} />
+    </div>
+  );
 
   const groups: BrowserGroup[] = useMemo(() => {
     const out: BrowserGroup[] = [];
@@ -365,11 +501,14 @@ export function ImagesPage() {
           </div>
           <JS9Viewer
             source={source}
+            darkUrl={darkUrl}
+            flatUrl={flatUrl}
             className="flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden bg-sky-ink"
           />
           <div className="max-h-40 shrink-0 overflow-y-auto border-t border-panel-border">
             <HeaderPanel meta={openMeta} />
           </div>
+          <div className="shrink-0 border-t border-panel-border">{calib}</div>
         </div>
       ) : (
         /* Main: file browser | viewer | header */
@@ -384,15 +523,30 @@ export function ImagesPage() {
 
           <JS9Viewer
             source={source}
+            darkUrl={darkUrl}
+            flatUrl={flatUrl}
             className="flex min-w-0 flex-1 flex-col overflow-hidden bg-sky-ink"
           />
 
           <ResizeHandle onPointerDown={right.onPointerDown} />
+          {/* Right column: FITS header (fills, scrolls) over the Calibrate card,
+              with a draggable sizer between. The card can't shrink below its
+              content (min = measured height). */}
           <div
             style={{ width: right.width }}
-            className="shrink-0 overflow-y-auto border-l border-panel-border"
+            className="flex shrink-0 flex-col overflow-hidden border-l border-panel-border"
           >
-            <HeaderPanel meta={openMeta} />
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <HeaderPanel meta={openMeta} />
+            </div>
+            <div
+              onPointerDown={calibGrip}
+              className="h-1.5 shrink-0 cursor-ns-resize touch-none border-y border-panel-border bg-panel-border/30 transition-colors hover:bg-blue-400/50 pointer-coarse:h-4"
+              title="Resize"
+            />
+            <div style={{ height: calibClamped, minHeight: calibMin }} className="shrink-0 overflow-hidden">
+              {calib}
+            </div>
           </div>
         </div>
       )}

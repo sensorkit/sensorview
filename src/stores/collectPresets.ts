@@ -12,6 +12,8 @@ export interface CollectPreset {
   binning_x?: number | null;
   binning_y?: number | null;
   gain?: number | null;
+  /** Camera readout-mode index (SK `readout_mode`, an int); unset = camera default. */
+  readout_mode?: number | null;
   frame_type?: FrameType | null;
   filter_name?: string | null;
   /** 0-based frame indices captured under sidereal tracking (empty = none). */

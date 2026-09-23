@@ -28,6 +28,23 @@ export interface JS9Image {
   id?: string;
   displayImage?: (which?: string) => void;
   setZoom?: (value: string | number) => void;
+  /** Set the scale/clipping mode (e.g. "zscale") and repaint. */
+  setScale?: (scale: string) => void;
+  /** Recompute the zscale (z1/z2) limits for the currently active raw. */
+  zscale?: (mode?: boolean | string) => void;
+  /** Full-resolution pixel data (present regardless of display size). */
+  raw?: { width: number; height: number; data?: ArrayLike<number> };
+  /**
+   * Per-pixel image arithmetic on this image via a named rawDataLayer.
+   * `imarithData("sub", darkImage)` stores `this − darkImage` and repaints;
+   * `imarithData("reset")` removes the layer, restoring the original pixels.
+   * Both images must be the same width/height.
+   */
+  imarithData?: (
+    op: "add" | "sub" | "mul" | "div" | "min" | "max" | "reset" | "remove",
+    arg?: JS9Image | number,
+    opts?: Record<string, unknown>,
+  ) => void;
 }
 
 /** Minimal subset of the JS9 API we touch. */

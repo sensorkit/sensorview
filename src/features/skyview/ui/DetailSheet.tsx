@@ -25,6 +25,7 @@ import {
   useMountActivities,
 } from "../../../lib/sensorkit-client/instruments";
 import {
+  abortControllerTask,
   executeControllerTask,
   followTarget,
   icrsTarget,
@@ -472,7 +473,48 @@ export function ActionButtons({
   const canTrack = hasMount && showTrack && !mountBusy && !sunGuarded;
   const canCollect = !!active && !mountBusy && !sunGuarded;
 
+  // A collect on the active controller is in progress — true across the whole
+  // task lifecycle (slew-to-target, then frames), so the Collect button can
+  // become Abort even before the first frame lands.
+  const collectRunning =
+    activeActivity?.taskType === "collect" ||
+    activeActivity?.taskType === "standard_collect";
+
   const busy = status.phase === "pending";
+  const [confirmAbort, setConfirmAbort] = useState(false);
+  // Abort gets its own in-flight flag, deliberately NOT `busy`: SK's /execute
+  // blocks until the collect finishes, so `busy` stays true for the whole
+  // collect — the exact window Abort must stay clickable.
+  const [aborting, setAborting] = useState(false);
+  // Set while an abort is pending, so the collect's /execute settling — SK ends
+  // it by cancelling the blocked call — reads as "aborted", not "failed".
+  const abortRequestedRef = useRef(false);
+
+  const onAbort = async () => {
+    if (!active) return;
+    setConfirmAbort(false);
+    // The collect may have finished between opening the dialog and confirming.
+    // With no task in flight there's nothing to abort (SK would just 409), so
+    // skip quietly — the button has already reverted to Collect.
+    const taskId = activeActivity?.taskId;
+    if (!taskId) return;
+    abortRequestedRef.current = true;
+    setAborting(true);
+    try {
+      await abortControllerTask(active.id, taskId);
+    } catch (err) {
+      // Abort itself failed — the collect is still running. Clear the flag so
+      // its eventual completion isn't mislabeled, and surface the error.
+      abortRequestedRef.current = false;
+      setStatus({
+        phase: "err",
+        label: "Abort",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setAborting(false);
+    }
+  };
 
   const runAction = async (label: string, fn: () => Promise<unknown>) => {
     setStatus({ phase: "pending", label });
@@ -482,6 +524,13 @@ export function ActionButtons({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setStatus({ phase: "err", label, message });
+    } finally {
+      // An action cut short by Abort lands here (the collect's blocked call is
+      // cancelled). Override the ok/err we just set with a neutral "aborted".
+      if (abortRequestedRef.current) {
+        abortRequestedRef.current = false;
+        setStatus({ phase: "ok", label: "Collect aborted" });
+      }
     }
   };
 
@@ -615,6 +664,7 @@ export function ActionButtons({
             binning_x: preset.binning_x ?? null,
             binning_y: preset.binning_y ?? null,
             gain: preset.gain ?? null,
+            readout_mode: preset.readout_mode ?? null,
             frame_type: preset.frame_type ?? null,
             filter_name: preset.filter_name ?? null,
           },
@@ -707,20 +757,34 @@ export function ActionButtons({
             tone="blue"
           />
         )}
-        {showCollect && (
-          <CollectSplitButton
-            palette={palette}
-            disabled={!canCollect || busy}
-            tooltip={
-              sunTooltip ??
-              noInstrumentsMsg ??
-              mountBusyReason ??
-              (!active ? "No controller" : undefined)
-            }
-            onCollect={onCollect}
-          />
-        )}
+        {showCollect &&
+          (collectRunning ? (
+            <AbortButton
+              palette={palette}
+              disabled={aborting}
+              onClick={() => setConfirmAbort(true)}
+            />
+          ) : (
+            <CollectSplitButton
+              palette={palette}
+              disabled={!canCollect || busy}
+              tooltip={
+                sunTooltip ??
+                noInstrumentsMsg ??
+                mountBusyReason ??
+                (!active ? "No controller" : undefined)
+              }
+              onCollect={onCollect}
+            />
+          ))}
       </div>
+
+      {confirmAbort && (
+        <AbortCollectDialog
+          onConfirm={onAbort}
+          onCancel={() => setConfirmAbort(false)}
+        />
+      )}
 
       {status.phase !== "idle" && (
         <div
@@ -813,6 +877,95 @@ function ActionBtn({
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1) + "…";
+}
+
+// Red counterpart to the Collect button, shown while a collect is in flight.
+// Sized to fill the Collect slot (flex) in both palettes.
+function AbortButton({
+  disabled,
+  onClick,
+  palette = "dark",
+}: {
+  disabled: boolean;
+  onClick: () => void;
+  palette?: ActionPalette;
+}) {
+  if (palette === "paper") {
+    return (
+      <button
+        disabled={disabled}
+        onClick={onClick}
+        title="Abort the collect in progress"
+        className="text-center text-[12px] font-medium rounded-sm"
+        style={{
+          flex: 1.7,
+          padding: "8px 6px",
+          background: "#b91c1c",
+          color: "#fff",
+          border: "1px solid #b91c1c",
+          opacity: disabled ? 0.55 : 1,
+          cursor: disabled ? "not-allowed" : "pointer",
+        }}
+      >
+        ◼ Abort
+      </button>
+    );
+  }
+  return (
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      title="Abort the collect in progress"
+      className={`flex-1 py-2 px-3 rounded-lg text-xs font-medium border transition-colors ${
+        disabled
+          ? "bg-red-600/20 text-red-300 border-red-500/20 opacity-50 cursor-not-allowed"
+          : "bg-red-600/30 text-red-200 border-red-500/40 hover:bg-red-600/50"
+      }`}
+    >
+      Abort
+    </button>
+  );
+}
+
+// "Are you sure?" gate before aborting an in-progress collect. Standard
+// dark-panel overlay, matching the app's other modals.
+function AbortCollectDialog({
+  onConfirm,
+  onCancel,
+}: {
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      onClick={onCancel}
+    >
+      <div
+        className="bg-panel-bg border border-panel-border rounded-lg p-5 w-[360px] max-w-[90vw] space-y-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="text-sm font-semibold text-text-bright">Are you sure?</h2>
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-1 text-[11px] uppercase tracking-wide rounded border border-panel-border bg-white/5 text-text-dim hover:bg-white/10 hover:text-text-bright"
+          >
+            No
+          </button>
+          <button
+            type="button"
+            autoFocus
+            onClick={onConfirm}
+            className="px-3 py-1 text-[11px] uppercase tracking-wide rounded border border-red-500/50 bg-red-600/30 text-red-200 hover:bg-red-600/50"
+          >
+            Yes
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function CollectSplitButton({

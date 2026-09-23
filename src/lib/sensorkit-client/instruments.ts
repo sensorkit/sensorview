@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  entityTypeOf,
   isControllerState,
   shallowArrayEqual,
   useSensorKitSlice,
@@ -16,7 +17,7 @@ import {
   type CatalogRecord,
   type SatKey,
 } from "../../stores/satellites";
-import type { Capabilities } from "./types";
+import type { Capabilities, EntityListing } from "./types";
 
 /**
  * Activity thresholds. The simulator reports `velocity: 0` even while tracking,
@@ -155,6 +156,63 @@ function instrumentsEqual(a: Instrument[], b: Instrument[]): boolean {
  */
 export function useInstruments(): Instrument[] {
   return useSensorKitSlice((s) => computeInstruments(s.state), instrumentsEqual);
+}
+
+/**
+ * Reconstruct the entity listing from live `state` rather than the one-shot
+ * `/entities` snapshot. Every entity publishes an EntityInfo keyword (type +
+ * details) on attach and holds an EntityLease while alive, both over the
+ * firehose — so an entity that registers *after* the SSE (re)connect shows up
+ * here immediately, where the snapshot misses it until the next reconnect or a
+ * manual page refresh.
+ *
+ * Carries name/entity_type/online/details — NOT archetype/traits, which only
+ * the richer REST listing computes. Consumers needing those keep reading the
+ * store's `entities` snapshot; this serves callers that key off type/online
+ * (e.g. the Tasks tab's program + controller cards).
+ */
+function computeEntities(state: StateMap): EntityListing[] {
+  const out: EntityListing[] = [];
+  for (const [name, ent] of Object.entries(state)) {
+    const entity_type = entityTypeOf(ent);
+    if (!entity_type) continue; // no EntityInfo yet → not listable (matches /entities)
+    const info = ent["EntityInfo"] as
+      | { details?: Record<string, unknown> | null }
+      | undefined;
+    out.push({
+      entity_type,
+      name,
+      // Same lease gate as useInstruments — honest liveness, unlike the
+      // snapshot's `online` which freezes at reconnect.
+      online: isEntityLive(state, name),
+      details: info?.details ?? null,
+    });
+  }
+  // `state` has no inherent order; sort by name so the list stays stable
+  // across re-renders and record arrivals.
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function entitiesEqual(a: EntityListing[], b: EntityListing[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.name !== y.name || x.entity_type !== y.entity_type || x.online !== y.online) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Live entity listing derived from the firehose — a self-healing replacement
+ * for the store's `/entities` snapshot for consumers that only need
+ * name/entity_type/online. Slice-cached like useInstruments, so only
+ * add/remove/lease-flips trigger a re-render, not every telemetry flush.
+ */
+export function useEntities(): EntityListing[] {
+  return useSensorKitSlice((s) => computeEntities(s.state), entitiesEqual);
 }
 
 /**
@@ -331,6 +389,11 @@ export interface MountActivity {
   detail: string | null;
   /** Controller task id when executing. */
   taskId: string | null;
+  /** SK semantic task_type of the in-flight controller task (e.g.
+   * "standard_collect"), or null when idle. Survives the slew-to-target phase
+   * of a collect, where `kind` reads "slewing" — so consumers can tell a
+   * collect is running before the first frame lands. */
+  taskType: string | null;
   /** Frame count total when collecting. */
   frameTotal: number | null;
   /** The camera attached to this controller, for frame-progress derivation. */
@@ -410,6 +473,7 @@ export function useMountActivities(): MountActivity[] {
         instrumentId: inst.id,
         cameraId: inst.camera,
         taskId: null as string | null,
+        taskType: null as string | null,
         frameTotal: null as number | null,
       };
 
@@ -454,6 +518,7 @@ export function useMountActivities(): MountActivity[] {
       const baseWithTask = {
         ...base,
         taskId: taskInfo?.taskId ?? null,
+        taskType: taskInfo?.taskType ?? null,
         frameTotal: taskInfo?.frameTotal ?? null,
       };
 

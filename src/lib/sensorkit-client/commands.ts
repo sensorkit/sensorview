@@ -191,6 +191,7 @@ export interface CameraParameterSet {
   binning_x?: number | null;
   binning_y?: number | null;
   gain?: number | null;
+  readout_mode?: number | null;
   frame_type?: "light" | "dark" | "bias" | "flat" | null;
   filter_name?: string | null;
 }
@@ -272,15 +273,22 @@ export function standardCollectTask(
   // The collection deadline is the dispatch `expiry_time` on the envelope (SK
   // migrated the pre-split `end_time` deadline to `expiry_time`).
   const expiry = opts.endTime ?? new Date(Date.now() + 5 * 60_000);
+  const camera_params: CameraParameterSet = {
+    integration_time_seconds: integration,
+    frame_count: frames,
+    ...opts.camera,
+  };
+  // SK's `frame_type` is a non-Optional enum with a server-side default
+  // (light). A Pydantic default only fills an *absent* key — an explicit
+  // `null` is validated against the enum and rejected with 422. So drop it
+  // when unset and let SK apply its default. (The other camera fields are
+  // Optional, so their nulls are fine.)
+  if (camera_params.frame_type == null) delete camera_params.frame_type;
   return {
     task: {
       task_type: "standard_collect",
       target,
-      camera_params: {
-        integration_time_seconds: integration,
-        frame_count: frames,
-        ...opts.camera,
-      },
+      camera_params,
       sidereal_frames: opts.siderealFrames ?? [],
       target_id: opts.targetId ?? null,
     },
@@ -313,6 +321,14 @@ export function sendDeviceCommand(deviceId: string, command: unknown): Promise<u
 // `TaskSubmission` envelope carrying `context`/`expiry_time` (e.g. collect tasks).
 export function executeControllerTask(controllerId: string, task: unknown): Promise<unknown> {
   return postJSON(skUrl(`/controller/${encodeURIComponent(controllerId)}/execute`), task);
+}
+
+// Abort the in-flight controller task. Passing the known task_id targets that
+// specific task; omit it to abort whatever the controller is currently running.
+export function abortControllerTask(controllerId: string, taskId?: string): Promise<unknown> {
+  const base = skUrl(`/controller/${encodeURIComponent(controllerId)}/abort`);
+  const url = taskId ? `${base}?task_id=${encodeURIComponent(taskId)}` : base;
+  return postJSON(url, {});
 }
 
 // === Program lifecycle ===
@@ -393,3 +409,27 @@ export const initTask = () => lifecycleTask("init");
 export const standbyTask = () => lifecycleTask("standby");
 export const shutdownTask = () => lifecycleTask("shutdown");
 export const recoverTask = () => lifecycleTask("recover");
+
+// === Entity requests ===
+
+// Invoke a named request handler on any entity (SK's untyped counterpart to a
+// device command). The entity defines what `name` and `body` mean — e.g. the
+// autofocus analyzer's "run_vcurve" and "set_enabled".
+export function entityRequest(
+  entityId: string,
+  name: string,
+  body: unknown = {},
+): Promise<unknown> {
+  return postJSON(
+    skUrl(`/entity/${encodeURIComponent(entityId)}/request/${encodeURIComponent(name)}`),
+    body,
+  );
+}
+
+// Stop a program's tasking and abort its in-flight task. Queued-but-unstarted
+// work is not drained: SK has no endpoint for that, and the autofocus queue
+// prunes its own steps once their end_time passes.
+// ponytail: relies on step expiry; add a real drain if SK grows a cancel request.
+export function abortProgramTasking(programId: string): Promise<unknown> {
+  return postJSON(skUrl(`/program/${encodeURIComponent(programId)}/abort`), {});
+}

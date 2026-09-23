@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { useJS9, type JS9Image, type JS9ErrorFn } from "../../lib/js9/useJS9";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useJS9, type JS9Global, type JS9Image, type JS9ErrorFn } from "../../lib/js9/useJS9";
+import { safeFlat } from "./flatNormalize";
 
 /** What the viewer should display: a dropped local file or a remote FITS URL. */
 export type ImageSource =
@@ -171,6 +172,7 @@ function configureInteractions(): void {
  */
 let errorSink: ((message: string | null) => void) | null = null;
 let loadPhase = false; // true from our JS9.Load() until its onload or failure
+let calLoadPhase = false; // true while a calibration frame loads (offscreen) — swallow its noise
 let loadGen = 0; // guards the post-failure reset against a newer load
 let loadFailed = false; // dedupes one failure's error cascade
 let trapInstalled = false;
@@ -197,7 +199,7 @@ function installErrorTrap(): void {
   const original = J.error;
 
   const trap: JS9ErrorFn = function (this: unknown, msg, err, fatal) {
-    if (!loadPhase) {
+    if (!loadPhase && !calLoadPhase) {
       // Not our load — leave JS9's default reporting untouched.
       return original?.call(this, msg, err, fatal);
     }
@@ -207,6 +209,10 @@ function installErrorTrap(): void {
     } catch {
       // ignore
     }
+    // A calibration frame that won't decode just means no calibration — swallow
+    // silently (logged by the caller) rather than surfacing on the main viewer.
+    // Only when no main-frame load is also in flight, so a real frame error still shows.
+    if (calLoadPhase && !loadPhase) return;
     // Only the throw-flagged astroem errors are real load failures; the first
     // one carries the useful diagnosis. Benign warnings (no throw flag) are
     // swallowed too — so no modal — but don't surface as an error.
@@ -236,9 +242,106 @@ function formatValpos(raw: string): string {
   return m ? `I=${m[1]}, x=${m[2]}, y=${m[3]} ${m[4]}` : raw.trim();
 }
 
+/**
+ * Calibration-frame plumbing. Dark/flat frames are loaded into their own
+ * offscreen JS9 display so the main viewer's current image never changes (no
+ * flicker, no zoom reset); we only need each frame's parsed `.raw.data` to hand
+ * to `imarithData`. Frames are cached by URL — a session uses only a couple
+ * (one dark, one flat), so the cache isn't evicted.
+ */
+const CAL_DISPLAY_ID = "SensorViewJS9Cal";
+/** Raw-data layer ids, applied bottom-up in this order (dark then flat). */
+const DARK_RAWID = "caldark";
+const FLAT_RAWID = "calflat";
+let calDisplayReady = false;
+const calCache = new Map<string, JS9Image>();
+
+function ensureCalDisplay(js9: JS9Global): boolean {
+  if (calDisplayReady) return true;
+  if (typeof document === "undefined") return false;
+  const div = document.createElement("div");
+  div.className = "JS9";
+  div.id = CAL_DISPLAY_ID;
+  div.setAttribute("data-width", "64");
+  div.setAttribute("data-height", "64");
+  // Off-screen but laid out (not display:none) so JS9 can build its canvas;
+  // raw pixel data is full-resolution regardless of this size.
+  div.style.cssText =
+    "position:absolute;left:-99999px;top:0;width:64px;height:64px;pointer-events:none;";
+  document.body.appendChild(div);
+  try {
+    js9.AddDivs?.(CAL_DISPLAY_ID);
+  } catch {
+    // already registered
+  }
+  calDisplayReady = true;
+  return true;
+}
+
+/**
+ * Replace a flat frame's pixel buffer in place with its normalized "safe flat"
+ * (median 1.0, dead pixels clamped to 1.0), so `imarithData("div")` divides by
+ * it directly. Runs once per flat, at load, before it's cached.
+ */
+function normalizeFlat(im: JS9Image): void {
+  if (im.raw?.data && im.raw.data.length > 0) im.raw.data = safeFlat(im.raw.data);
+}
+
+/**
+ * Load a calibration FITS (by URL) as a JS9 image, resolving with its handle.
+ * Flats are normalized (see `normalizeFlat`) before caching; darks are used raw.
+ */
+function loadCalFrame(js9: JS9Global, url: string, normalize: boolean): Promise<JS9Image> {
+  const cached = calCache.get(url);
+  if (cached) return Promise.resolve(cached);
+  if (!ensureCalDisplay(js9)) return Promise.reject(new Error("no cal display"));
+
+  return new Promise((resolve, reject) => {
+    calLoadPhase = true;
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      calLoadPhase = false;
+      fn();
+    };
+    const timer = window.setTimeout(
+      () => finish(() => reject(new Error("cal frame load timed out"))),
+      20000,
+    );
+    try {
+      js9.Load(url, {
+        display: CAL_DISPLAY_ID,
+        onload(im: JS9Image) {
+          if (normalize) {
+            try {
+              normalizeFlat(im);
+            } catch (err) {
+              console.warn("flat normalization failed", err);
+            }
+          }
+          calCache.set(url, im);
+          finish(() => resolve(im));
+        },
+      });
+    } catch (err) {
+      finish(() => reject(err instanceof Error ? err : new Error(String(err))));
+    }
+  });
+}
+
 interface Props {
   /** Image to load. Passing null closes the current image. */
   source: ImageSource | null;
+  /**
+   * FITS URL of a dark frame to subtract from the displayed image, or null. The
+   * subtraction applies only to the currently rendered frame; changing `source`
+   * re-derives it upstream.
+   */
+  darkUrl?: string | null;
+  /** FITS URL of a flat frame to divide out of the displayed image, or null. */
+  flatUrl?: string | null;
   /** Applied to the viewer's outer column (menubar + scrollable canvas). */
   className?: string;
 }
@@ -248,13 +351,92 @@ interface Props {
  * canvas below with a value/position readout. JS9.Load fetches remote FITS
  * itself (SK serves with permissive CORS).
  */
-export function JS9Viewer({ source, className }: Props) {
+export function JS9Viewer({ source, darkUrl, flatUrl, className }: Props) {
   const { ready, js9, error } = useJS9();
   const menubarHostRef = useRef<HTMLDivElement>(null);
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const scrollHostRef = useRef<HTMLDivElement>(null);
   const lastKeyRef = useRef<string | null>(null);
   const [valpos, setValpos] = useState("");
+
+  // Calibration state: the current displayed image, refs for the desired dark/
+  // flat URLs (so the load effect needn't depend on them), a signature of what's
+  // applied to the current image, and the latest desired signature (guards a
+  // reconcile against a newer one that started while it was loading frames).
+  const currentImgRef = useRef<JS9Image | null>(null);
+  const darkUrlRef = useRef<string | null>(darkUrl ?? null);
+  const flatUrlRef = useRef<string | null>(flatUrl ?? null);
+  const appliedSigRef = useRef<string>("");
+  const desiredSigRef = useRef<string>("");
+
+  // The calibration ops for the current desired state, applied bottom-up: dark
+  // subtracted first, then flat divided out — the physically correct order.
+  const buildOps = useCallback((): { op: "sub" | "div"; url: string; rawid: string }[] => {
+    const ops: { op: "sub" | "div"; url: string; rawid: string }[] = [];
+    if (darkUrlRef.current) ops.push({ op: "sub", url: darkUrlRef.current, rawid: DARK_RAWID });
+    if (flatUrlRef.current) ops.push({ op: "div", url: flatUrlRef.current, rawid: FLAT_RAWID });
+    return ops;
+  }, []);
+
+  const reconcileCal = useCallback(
+    async (img: JS9Image | null) => {
+      if (!img || !js9) return;
+      const ops = buildOps();
+      const sig = ops.map((o) => `${o.op}:${o.url}`).join("|");
+      desiredSigRef.current = sig;
+      if (appliedSigRef.current === sig) return;
+
+      // Load every needed frame first, so a slow/failed load never tears down a
+      // good layer stack before we can rebuild it.
+      const loaded: { rawid: string; op: "sub" | "div"; frame: JS9Image }[] = [];
+      for (const o of ops) {
+        try {
+          // Flats (div) are normalized to median 1.0; darks (sub) are used raw.
+          const frame = await loadCalFrame(js9, o.url, o.op === "div");
+          loaded.push({ rawid: o.rawid, op: o.op, frame });
+        } catch (err) {
+          console.warn("calibration frame load failed", o.op, err);
+        }
+      }
+      // Superseded by a newer frame or toggle while loading — drop this pass.
+      if (currentImgRef.current !== img || desiredSigRef.current !== sig) return;
+
+      // Rebuild the whole stack from the original pixels: imarith operates on the
+      // current raw, so incremental removal would leave later layers stale.
+      for (const rawid of [FLAT_RAWID, DARK_RAWID]) {
+        try {
+          img.imarithData?.("reset", undefined, { rawid });
+        } catch {
+          // no such layer
+        }
+      }
+      for (const { op, frame, rawid } of loaded) {
+        try {
+          img.imarithData?.(op, frame, { rawid });
+        } catch (err) {
+          console.warn("imarith failed", op, err);
+        }
+      }
+      // Removing/replacing layers leaves JS9 stretched to raw data min/max (the
+      // frame goes near-black); recompute zscale for the now-current raw and
+      // repaint so every calibration state is stretched sensibly.
+      try {
+        img.zscale?.(true);
+        img.setScale?.("zscale");
+      } catch {
+        // scale API missing — leave the display as-is
+      }
+      appliedSigRef.current = sig;
+    },
+    [js9, buildOps],
+  );
+
+  // Toggle / new-match path: re-run calibration without reloading the frame.
+  useEffect(() => {
+    darkUrlRef.current = darkUrl ?? null;
+    flatUrlRef.current = flatUrl ?? null;
+    if (ready && js9) void reconcileCal(currentImgRef.current);
+  }, [darkUrl, flatUrl, ready, js9, reconcileCal]);
   // A per-image load failure (bad/corrupt FITS). Shown inline instead of JS9's
   // dead modal; the error trap feeds it via the module-level errorSink.
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -359,6 +541,8 @@ export function JS9Viewer({ source, className }: Props) {
       }
       nodes.holder.append(nodes.menubar, nodes.canvas);
       lastKeyRef.current = null; // force a reload when the tab is reopened
+      currentImgRef.current = null;
+      appliedSigRef.current = "";
     };
   }, [ready, js9]);
 
@@ -379,6 +563,9 @@ export function JS9Viewer({ source, className }: Props) {
     lastKeyRef.current = key;
     setValpos("");
 
+    // The outgoing image (and its imarith layers) is about to be closed.
+    currentImgRef.current = null;
+    appliedSigRef.current = "";
     try {
       js9.CloseImage({ display: DISPLAY_ID, clear: false });
     } catch {
@@ -410,6 +597,11 @@ export function JS9Viewer({ source, className }: Props) {
           } catch {
             // ignore
           }
+          // This fresh image carries no imarith layer yet; apply the current
+          // calibration selection (if any) to it.
+          currentImgRef.current = im;
+          appliedSigRef.current = "";
+          void reconcileCal(im);
         },
       });
     } catch (err) {
@@ -417,7 +609,7 @@ export function JS9Viewer({ source, className }: Props) {
       setLoadError(err instanceof Error ? err.message : String(err));
       loadPhase = false;
     }
-  }, [ready, js9, source]);
+  }, [ready, js9, source, reconcileCal]);
 
   // Surface JS9's (hidden, off-screen) value/position readout below the frame.
   // JS9 keeps it updated on hover; we reformat and render it ourselves.

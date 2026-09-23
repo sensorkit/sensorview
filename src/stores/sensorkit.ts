@@ -6,6 +6,7 @@ import type {
   AgentState,
   ConnectionStatus,
   EntityListing,
+  EntityType,
   ProductEntry,
   ProductInfo,
   ProductMetadata,
@@ -221,26 +222,32 @@ function latestAfterRecord(
 }
 
 /**
- * True iff this entity's live KV state identifies it as a controller. Reads
- * `entity_type` from the EntityInfo keyword (current SK), with a fallback to a
- * top-level `type` field (older SK).
+ * This entity's type from its live KV state: `EntityInfo.entity_type` (current
+ * SK), falling back to a top-level `type` field (older SK). undefined when the
+ * entity hasn't published EntityInfo yet — the same entities the REST
+ * `/entities` listing omits.
  *
- * Keyed off live `state` (not the `/entities` snapshot) on purpose: the
- * snapshot is only refetched on SSE (re)connect, but EntityInfo/EntityLease/
- * Capabilities records stream in live, so a controller that registers after
- * the initial fetch — e.g. shut down for maintenance, then brought back — is
- * recognized the moment its records arrive, no reconnect required. Both
- * `useInstruments` and `getSitePosition` gate on this so they stay in sync.
+ * Read off live `state` (not the `/entities` snapshot) on purpose: the snapshot
+ * is only refetched on SSE (re)connect, but EntityInfo/EntityLease/Capabilities
+ * records stream in live, so an entity that registers after the initial fetch —
+ * e.g. a program brought up seconds after SK restarts, or a controller shut
+ * down for maintenance then restored — is recognized the moment its records
+ * arrive, no reconnect required. `useEntities`, `useInstruments`, and
+ * `getSitePosition` all route through here so they stay in sync.
  */
+export function entityTypeOf(
+  entityState: Record<string, unknown> | undefined,
+): EntityType | undefined {
+  if (!entityState) return undefined;
+  const info = entityState["EntityInfo"] as { entity_type?: EntityType } | undefined;
+  return info?.entity_type ?? (entityState as { type?: EntityType }).type;
+}
+
+/** True iff this entity's live KV state identifies it as a controller. */
 export function isControllerState(
   entityState: Record<string, unknown> | undefined,
 ): boolean {
-  if (!entityState) return false;
-  const info = entityState["EntityInfo"] as { entity_type?: string } | undefined;
-  return (
-    info?.entity_type === "controller" ||
-    (entityState as { type?: string }).type === "controller"
-  );
+  return entityTypeOf(entityState) === "controller";
 }
 
 export const useSensorKitStore = create<SensorKitStore>()(
