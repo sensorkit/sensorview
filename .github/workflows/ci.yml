@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same branch/PR supersedes the in-flight run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install deps
+        # Same workaround as release.yml: the lockfile is generated on a
+        # different platform, and `npm install` against it skips the
+        # platform-specific rollup optional dep; `npm ci` also trips on the
+        # js9→engine.io→cookie semver mismatch. Resolve fresh instead.
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund
+
+      - name: Type-check and build
+        run: npm run build
+
+  sidecar:
+    name: Sidecar check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install deps
+        # --locked fails if uv.lock is out of date with pyproject.toml.
+        run: uv sync --locked
+
+      - name: Byte-compile sources
+        run: uv run python -m compileall -q main.py routers services
+
+      - name: Import app
+        run: uv run python -c "import main; print('routes:', len(main.app.routes))"
