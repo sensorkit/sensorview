@@ -32,7 +32,10 @@ const isDesktop =
 
 export const useBackends = create<BackendsState>((set) => ({
   sensorViewApi: "",
-  sensorKit: isDesktop ? "http://127.0.0.1:8000" : "",
+  // Under the Vite dev server (`electron:dev` too), leave this empty so skUrl()
+  // routes through the same-origin /sk proxy. SensorKit allows no browser
+  // origins by default, so direct calls from http://localhost:5173 hit CORS.
+  sensorKit: isDesktop && !import.meta.env.DEV ? "http://127.0.0.1:8000" : "",
   programName: "sensorview",
   setSensorViewApi: (sensorViewApi) => set({ sensorViewApi }),
   setSensorKit: (sensorKit) => set({ sensorKit }),

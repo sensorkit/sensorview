@@ -26,7 +26,7 @@ export function SensorKitConnectionSettings() {
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-        placeholder={electron ? "http://localhost:8000" : "(dev: uses Vite proxy)"}
+        placeholder={electron && !import.meta.env.DEV ? "http://localhost:8000" : "(dev: uses Vite proxy)"}
         className="w-full rounded border border-panel-border bg-black/30 px-2 py-1 font-mono text-xs text-text-bright focus:outline-none focus:border-accent"
       />
     </div>
