@@ -10,7 +10,7 @@ dependencies = [
     "aiosqlite>=0.20",
 ]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pyinstaller>=6.10",
 ]
