@@ -36,7 +36,7 @@ const APP_ICON = join(__dirname, "..", "dist", "logos", "sensorkit-logomark.png"
 })();
 
 /** Children we spawn at app start and shut down at app quit. */
-/** @type {import('child_process').ChildProcess[]} */
+/** @type {{ child: import('child_process').ChildProcess, stdinLifeline: boolean }[]} */
 const childProcesses = [];
 
 /** On-demand `docker logs -f` tails, keyed by container name. Each entry tracks
@@ -133,16 +133,37 @@ function pickFreePort() {
 /**
  * Start a long-running child process, plumb its output through console.log
  * with a name prefix, and register it for shutdown on app quit.
+ *
+ * With `stdinLifeline`, the child gets a stdin pipe that we never write to.
+ * Only we hold its write end, so the OS closes it whenever this process exits,
+ * whether by a normal quit, a crash or a kill. The child treats EOF as "shut
+ * down". Use it for children that support that convention. They stop
+ * gracefully on every platform, and nothing is orphaned if we die.
  * @param {string} name short identifier used in log prefix
  * @param {string} bin absolute path to the binary
  * @param {string[]} args
- * @param {NodeJS.ProcessEnv} [env] additional env vars merged with process.env
+ * @param {{ env?: NodeJS.ProcessEnv, stdinLifeline?: boolean }} [opts]
+ *   env: additional env vars merged with process.env
  */
-function spawnSupervisedChild(name, bin, args, env) {
+function spawnSupervisedChild(name, bin, args, opts = {}) {
+  const { env, stdinLifeline = false } = opts;
   const child = spawn(bin, args, {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [stdinLifeline ? "pipe" : "ignore", "pipe", "pipe"],
     env: { ...process.env, ...(env ?? {}) },
+    // On Windows, libuv puts non-detached children in a job object that is
+    // killed when we die. A lifeline child must outlive us long enough to see
+    // EOF and exit on its own. For the PyInstaller sidecar that matters: if
+    // the bootloader is killed, its _MEI temp extraction (~25 MB) never gets
+    // cleaned up.
+    ...(stdinLifeline && process.platform === "win32"
+      ? { detached: true, windowsHide: true }
+      : {}),
   });
+  if (stdinLifeline) {
+    // EPIPE etc. once the child has exited. Nothing to do, and an unhandled
+    // stream error would crash the main process.
+    child.stdin.on("error", () => {});
+  }
   // Children often emit several lines in a single chunk. Prefix each line
   // individually so logs stay readable when streams are interleaved.
   const prefixLines = (prefix) => (b) => {
@@ -153,7 +174,7 @@ function spawnSupervisedChild(name, bin, args, env) {
   child.stdout.on("data", prefixLines(name));
   child.stderr.on("data", prefixLines(`${name}:err`));
   child.on("exit", (code) => console.log(`[${name}] exited ${code}`));
-  childProcesses.push(child);
+  childProcesses.push({ child, stdinLifeline });
   return child;
 }
 
@@ -165,8 +186,19 @@ async function spawnSidecar() {
   spawnSupervisedChild(
     "sidecar",
     bin,
-    ["--port", String(port), "--host", "127.0.0.1", "--cache-dir", cacheDir],
-    { TLE_CACHE_DB: join(cacheDir, "tle_cache.db") },
+    [
+      "--port",
+      String(port),
+      "--host",
+      "127.0.0.1",
+      "--cache-dir",
+      cacheDir,
+      "--exit-on-stdin-eof",
+    ],
+    // The sidecar is a PyInstaller onefile binary. On Windows that's a
+    // bootloader plus a Python child, and child.kill() (TerminateProcess) only
+    // reaches the bootloader. The stdin lifeline reaches the real server.
+    { env: { TLE_CACHE_DB: join(cacheDir, "tle_cache.db") }, stdinLifeline: true },
   );
 
   sidecarPort = port;
@@ -806,8 +838,14 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  for (const child of childProcesses) {
-    if (!child.killed) child.kill("SIGTERM");
+  for (const { child, stdinLifeline } of childProcesses) {
+    if (stdinLifeline) {
+      // Closing stdin asks for a graceful shutdown. It would also happen
+      // implicitly when we exit; doing it here just starts it sooner.
+      child.stdin?.end();
+    } else if (!child.killed) {
+      child.kill("SIGTERM");
+    }
   }
   for (const entry of dockerTails.values()) {
     entry.stopped = true;

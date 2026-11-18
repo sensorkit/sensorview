@@ -1,7 +1,7 @@
 """SensorView supplemental API — TLE caching, image thumbnails, UI support data.
 
 Runs as a standalone uvicorn app in dev (`uv run uvicorn api.main:app`) or as
-a PyInstaller-bundled sidecar spawned by the Tauri shell. Accepts `--port`
+a PyInstaller-bundled sidecar spawned by the Electron shell. Accepts `--port`
 and `--host` so the host can assign a free port at runtime.
 """
 
@@ -9,6 +9,7 @@ import argparse
 import logging
 import os
 import sys
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -94,6 +95,34 @@ def _mount_spa(application: FastAPI) -> None:
 _mount_spa(app)
 
 
+# Upper bound on how long shutdown waits for in-flight requests. Long-lived
+# SSE streams would otherwise hold a graceful shutdown open indefinitely.
+_GRACEFUL_SHUTDOWN_TIMEOUT_S = 5
+
+
+def _exit_on_stdin_eof(server) -> None:
+    """Shut the server down gracefully once stdin reaches EOF.
+
+    The desktop shell spawns us with a stdin pipe and holds the only write end.
+    That end closes when the shell exits, whether it quits cleanly or crashes or
+    is killed, so EOF here means "parent is gone". This works across platforms
+    and survives the PyInstaller onefile bootloader, which hands the pipe to
+    the Python process it starts. Signals don't do that on Windows, where
+    killing the bootloader orphans this process.
+    """
+
+    def watch() -> None:
+        try:
+            while sys.stdin.buffer.read(4096):
+                pass  # the parent never writes; discard anything that arrives
+        except Exception:
+            logger.exception("stdin watch failed; shutting down")
+        logger.info("stdin closed (parent exited); shutting down")
+        server.should_exit = True
+
+    threading.Thread(target=watch, name="stdin-eof-watch", daemon=True).start()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="SensorView API")
     parser.add_argument("--host", default=os.environ.get("SV_API_HOST", "127.0.0.1"))
@@ -108,6 +137,12 @@ def main() -> None:
         help="Writable directory for the TLE SQLite cache. "
         "Overrides TLE_CACHE_DB if set.",
     )
+    parser.add_argument(
+        "--exit-on-stdin-eof",
+        action="store_true",
+        help="Shut down when stdin closes. Used by the desktop shell to tie "
+        "the sidecar's lifetime to its own.",
+    )
     args = parser.parse_args()
 
     if args.cache_dir:
@@ -115,7 +150,17 @@ def main() -> None:
 
     import uvicorn
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    config = uvicorn.Config(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level="info",
+        timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_TIMEOUT_S,
+    )
+    server = uvicorn.Server(config)
+    if args.exit_on_stdin_eof:
+        _exit_on_stdin_eof(server)
+    server.run()
 
 
 if __name__ == "__main__":
