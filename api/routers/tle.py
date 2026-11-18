@@ -67,6 +67,11 @@ async def startup():
     asyncio.create_task(_auto_refresh())
 
 
+@router.on_event("shutdown")
+async def shutdown():
+    await _cache.close()
+
+
 async def _auto_refresh():
     """Refresh enabled remote sources that have never been fetched or are stale."""
     try:

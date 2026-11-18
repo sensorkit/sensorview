@@ -112,6 +112,14 @@ class TLECacheService:
         if await self._count_all() == 0:
             await self._load_seed()
 
+    async def close(self):
+        """Close the database. Must run at shutdown: aiosqlite serves each
+        connection from a non-daemon thread, so an open connection keeps the
+        interpreter from exiting after the server stops."""
+        if self._db is not None:
+            db, self._db = self._db, None
+            await db.close()
+
     # Source orders that were only ever a shipped default, never a user's
     # choice. An install still sitting on one of these gets the current
     # default; anything else is a deliberate drag-to-reorder and is left alone.
