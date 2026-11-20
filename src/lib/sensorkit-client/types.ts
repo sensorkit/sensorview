@@ -17,6 +17,34 @@ export interface EntityListing {
   traits?: string[];
 }
 
+/** Shared fields in validated `EntityInfo.details`. */
+export interface EntityDetails {
+  published_keywords: string[];
+}
+
+export interface DeviceDetails extends EntityDetails {
+  supported_commands: string[];
+  /** Archetype name declared by the device. Custom names are valid. */
+  archetype: string | null;
+}
+
+/**
+ * One named instrument chain on a controller. `name` is nonempty, unique
+ * within its controller, case-sensitive, and kept literally (spaces included).
+ * `devices` are opaque device IDs with no meaningful order; may be empty.
+ */
+export interface InstrumentInfo {
+  name: string;
+  devices: string[];
+}
+
+export interface ControllerDetails extends EntityDetails {
+  controlled_devices: string[];
+  /** Task class names the controller accepts, e.g. "InitTask". */
+  supported_tasks: string[];
+  instruments: InstrumentInfo[];
+}
+
 /** Addressable subject inside the backend — path tuple + property name. */
 export interface Subject {
   path: string[];

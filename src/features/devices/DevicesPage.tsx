@@ -1,10 +1,17 @@
-import { useState } from "react";
-import { useSensorKitStore } from "../../stores/sensorkit";
+import { useMemo, useState } from "react";
+import {
+  entityTypeOf,
+  useSensorKitSlice,
+  useSensorKitStore,
+  type StateMap,
+} from "../../stores/sensorkit";
 import { useFeatureFlags } from "../../stores/featureFlags";
 import {
-  useInstruments,
-  type Instrument,
-} from "../../lib/sensorkit-client/instruments";
+  deviceDetailsOf,
+  useControllers,
+  type ControllerDevice,
+  type ControllerRow,
+} from "../../lib/sensorkit-client/entities";
 import {
   abortDevice,
   closeEnclosure,
@@ -25,63 +32,108 @@ import {
   standbyTask,
   stopDevice,
 } from "../../lib/sensorkit-client/commands";
-import type { Capabilities, EntityListing } from "../../lib/sensorkit-client/types";
+import type { DeviceDetails } from "../../lib/sensorkit-client/types";
 
-// Display-only overrides for SensorKit-native device kinds whose underscore form
-// reads awkwardly as a header. Other kinds keep their underscore — if an
-// Alpaca-leaked name like `cover_calibrator` ever shows up here, the leak is
-// diagnostic (a SensorKit module forgot to canonicalize), not noise.
-const KIND_LABELS: Record<string, string> = {
-  filter_changer: "filter changer",
-  mirror_cover: "mirror cover",
-};
+// Display labels for standard archetypes. A Map accepts any published name.
+const ARCHETYPE_LABELS = new Map<string, string>([
+  ["filter_changer", "filter changer"],
+  ["mirror_cover", "mirror cover"],
+]);
 
-// Card sort order, by direction of light travel through the system. Anything
-// not listed (including Alpaca-leaked names) falls to the bottom and sorts
-// alphabetically among its peers — surfacing oddities rather than hiding them.
-const KIND_ORDER: Record<string, number> = {
-  weather: 0,
-  enclosure: 1,
-  mirror_cover: 2,
-  mount: 3,
-  rotator: 4,
-  focuser: 5,
-  filter_changer: 6,
-  camera: 7,
-  safety_monitor: 8,
-  switch: 9,
-};
+// Order standard devices by optical path. Sort other archetypes by name.
+const ARCHETYPE_ORDER = new Map<string, number>([
+  ["weather", 0],
+  ["enclosure", 1],
+  ["mirror_cover", 2],
+  ["mount", 3],
+  ["rotator", 4],
+  ["focuser", 5],
+  ["filter_changer", 6],
+  ["camera", 7],
+  ["safety", 8],
+  ["switch", 9],
+]);
+
+function archetypeLabel(archetype: string | null): string {
+  if (archetype === null) return "device";
+  return ARCHETYPE_LABELS.get(archetype) ?? archetype;
+}
+
+/** Small-caps styling for known names; custom names keep their published case. */
+function archetypeLabelClass(archetype: string | null): string {
+  return archetype === null || ARCHETYPE_ORDER.has(archetype)
+    ? "uppercase tracking-wide"
+    : "font-mono";
+}
+
+/** Sort by archetype (light-travel order, then name; none last), then by ID. */
+function compareByArchetype(
+  a: { id: string; archetype: string | null },
+  b: { id: string; archetype: string | null },
+): number {
+  const rank = (x: string | null) =>
+    x === null ? 100 : (ARCHETYPE_ORDER.get(x) ?? 99);
+  const d = rank(a.archetype) - rank(b.archetype);
+  if (d !== 0) return d;
+  if (a.archetype !== b.archetype) {
+    return (a.archetype ?? "").localeCompare(b.archetype ?? "");
+  }
+  return a.id.localeCompare(b.id);
+}
+
+// === Live device entities ===
+
+/** A device entity from live state. Liveness and archetype are separate. */
+interface DeviceRow {
+  id: string;
+  /** Holds an EntityLease right now. */
+  online: boolean;
+  /** Validated EntityInfo.details; null when unpublished or malformed. */
+  details: DeviceDetails | null;
+}
+
+function archetypeOf(row: DeviceRow | undefined): string | null {
+  return row?.details?.archetype ?? null;
+}
+
+function computeDeviceRows(state: StateMap): DeviceRow[] {
+  const rows: DeviceRow[] = [];
+  for (const [id, ent] of Object.entries(state)) {
+    if (entityTypeOf(ent) !== "device") continue;
+    rows.push({ id, online: "EntityLease" in ent, details: deviceDetailsOf(ent) });
+  }
+  return rows.sort((a, b) =>
+    compareByArchetype(
+      { id: a.id, archetype: archetypeOf(a) },
+      { id: b.id, archetype: archetypeOf(b) },
+    ),
+  );
+}
+
+function deviceRowsEqual(a: DeviceRow[], b: DeviceRow[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    // `details` is cached by payload identity, so `!==` means republished.
+    if (x.id !== y.id || x.online !== y.online || x.details !== y.details) return false;
+  }
+  return true;
+}
+
+/** Re-renders on device add/remove, lease flips, and republished details only. */
+function useDeviceRows(): DeviceRow[] {
+  return useSensorKitSlice((s) => computeDeviceRows(s.state), deviceRowsEqual);
+}
 
 export function DevicesPage() {
-  const entities = useSensorKitStore((s) => s.entities);
-  const state = useSensorKitStore((s) => s.state);
   const connection = useSensorKitStore((s) => s.connection);
-  const instruments = useInstruments();
-
-  // Order devices by light-travel priority (KIND_ORDER), then alphabetically
-  // within each kind. Kind is computed the same way DeviceCard resolves it so
-  // the displayed header and the sort key always agree.
-  const devices = entities
-    .filter((e) => e.entity_type === "device")
-    .sort((a, b) => {
-      const aState = state[a.name] ?? {};
-      const bState = state[b.name] ?? {};
-      const aKind = resolveDeviceKind(
-        aState["Capabilities"] as Capabilities | undefined,
-        a.archetype,
-        aState,
-      );
-      const bKind = resolveDeviceKind(
-        bState["Capabilities"] as Capabilities | undefined,
-        b.archetype,
-        bState,
-      );
-      const aPri = KIND_ORDER[aKind] ?? 99;
-      const bPri = KIND_ORDER[bKind] ?? 99;
-      if (aPri !== bPri) return aPri - bPri;
-      if (aKind !== bKind) return aKind.localeCompare(bKind);
-      return a.name.localeCompare(b.name);
-    });
+  const controllers = useControllers();
+  const devices = useDeviceRows();
+  const deviceIndex = useMemo(
+    () => new Map(devices.map((d) => [d.id, d])),
+    [devices],
+  );
 
   // When SensorKit isn't reachable, collapse the page to a single line —
   // there's nothing real to show, and the SK LIVE pill in the top nav
@@ -101,22 +153,15 @@ export function DevicesPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-6xl mx-auto p-4 space-y-6">
-        {/* Controllers — with lifecycle + mount actions */}
-        {instruments.length > 0 && (
+          {/* Controllers and lifecycle actions */}
+        {controllers.length > 0 && (
           <section className="space-y-2">
             <h2 className="text-[11px] text-text-dim uppercase tracking-wider">
               Controllers
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {instruments.map((inst) => (
-                <ControllerCard
-                  key={inst.id}
-                  instrument={inst}
-                  operatingState={
-                    (state[inst.id]?.["OperatingState"] as { current?: string } | undefined)
-                      ?.current ?? null
-                  }
-                />
+              {controllers.map((c) => (
+                <ControllerCard key={c.id} controller={c} deviceIndex={deviceIndex} />
               ))}
             </div>
           </section>
@@ -132,7 +177,7 @@ export function DevicesPage() {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {devices.map((d) => (
-                <DeviceCard key={d.name} entity={d} deviceState={state[d.name] ?? {}} />
+                <DeviceCard key={d.id} row={d} />
               ))}
             </div>
           )}
@@ -150,31 +195,52 @@ type ActionStatus =
   | { phase: "ok"; label: string }
   | { phase: "err"; label: string; message: string };
 
+/**
+ * Controller lifecycle tasks this page can send, keyed by the task class name
+ * the controller publishes in `supported_tasks`. A button is shown only when
+ * the controller lists that exact class name. Init asks for confirmation.
+ */
+const LIFECYCLE_TASKS = [
+  { taskClass: "InitTask", label: "Init", build: initTask },
+  { taskClass: "StandbyTask", label: "Standby", build: standbyTask },
+  { taskClass: "ShutdownTask", label: "Shutdown", build: shutdownTask },
+] as const;
+
+type LifecycleTask = (typeof LIFECYCLE_TASKS)[number];
+
 function ControllerCard({
-  instrument,
-  operatingState,
+  controller,
+  deviceIndex,
 }: {
-  instrument: Instrument;
-  operatingState: string | null;
+  controller: ControllerRow;
+  deviceIndex: Map<string, DeviceRow>;
 }) {
   const [status, setStatus] = useState<ActionStatus>({ phase: "idle" });
   const [confirmInitOpen, setConfirmInitOpen] = useState(false);
+  // Primitive selector result: re-renders only when the state string changes.
+  const operatingState = useSensorKitStore(
+    (s) =>
+      (s.state[controller.id]?.["OperatingState"] as { current?: string } | undefined)
+        ?.current ?? null,
+  );
 
-  const run = async (label: string, fn: () => Promise<unknown>) => {
+  const { id, details, online } = controller;
+  const tasks: LifecycleTask[] = details
+    ? LIFECYCLE_TASKS.filter((t) => details.supported_tasks.includes(t.taskClass))
+    : [];
+  const init = tasks.find((t) => t.taskClass === "InitTask");
+
+  const run = async (task: LifecycleTask) => {
+    const label = task.label;
     setStatus({ phase: "pending", label });
     try {
-      await fn();
+      await executeControllerTask(id, task.build());
       setStatus({ phase: "ok", label });
       setTimeout(() => setStatus({ phase: "idle" }), 3500);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setStatus({ phase: "err", label, message });
     }
-  };
-
-  const runInit = () => {
-    setConfirmInitOpen(false);
-    run("Init", () => executeControllerTask(instrument.id, initTask()));
   };
 
   const busy = status.phase === "pending";
@@ -185,17 +251,14 @@ function ControllerCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm text-text-bright font-semibold truncate">
-            {instrument.id}
+            {id}
           </div>
           <div className="text-[10px] text-text-dim uppercase tracking-wide">
             controller
           </div>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <Pill
-            label={instrument.online ? "online" : "offline"}
-            tone={instrument.online ? "good" : "off"}
-          />
+          <Pill label={online ? "online" : "offline"} tone={online ? "good" : "off"} />
           {operatingState && (
             <Pill
               label={operatingState.toLowerCase()}
@@ -206,35 +269,29 @@ function ControllerCard({
       </div>
 
       {/* Devices */}
-      <ControllerDeviceChips instrument={instrument} />
+      {details ? (
+        <ControllerInventory controller={controller} deviceIndex={deviceIndex} />
+      ) : (
+        <div className="text-[10px] text-text-dim">
+          Controller details unavailable
+        </div>
+      )}
 
-      {/* Actions — Standard Controller lifecycle tasks (see std/sensor.py).
-          Mount-specific Home/Park live on the mount device card. */}
-      <div className="flex flex-wrap gap-1 pt-1 border-t border-panel-border">
-        <ControlBtn
-          label="Init"
-          disabled={busy || !instrument.online}
-          onClick={() => setConfirmInitOpen(true)}
-        />
-        <ControlBtn
-          label="Standby"
-          disabled={busy || !instrument.online}
-          onClick={() =>
-            run("Standby", () =>
-              executeControllerTask(instrument.id, standbyTask()),
-            )
-          }
-        />
-        <ControlBtn
-          label="Shutdown"
-          disabled={busy || !instrument.online}
-          onClick={() =>
-            run("Shutdown", () =>
-              executeControllerTask(instrument.id, shutdownTask()),
-            )
-          }
-        />
-      </div>
+      {/* Actions — lifecycle tasks the controller publishes in
+          supported_tasks. Mount-specific Home/Park live on the mount card. */}
+      {tasks.length > 0 && (
+        <div className="flex flex-wrap gap-1 pt-1 border-t border-panel-border">
+          {tasks.map((t) => (
+            <ControlBtn
+              key={t.taskClass}
+              label={t.label}
+              tooltip={t.taskClass}
+              disabled={busy || !online}
+              onClick={() => (t === init ? setConfirmInitOpen(true) : run(t))}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Status */}
       {status.phase !== "idle" && (
@@ -256,8 +313,14 @@ function ControllerCard({
 
       {confirmInitOpen && (
         <InitConfirmModal
-          instrument={instrument}
-          onConfirm={runInit}
+          controllerId={id}
+          // Re-checked live: the lease or supported_tasks may change while
+          // the dialog is open.
+          canConfirm={online && !busy && init !== undefined}
+          onConfirm={() => {
+            setConfirmInitOpen(false);
+            if (init) run(init);
+          }}
           onCancel={() => setConfirmInitOpen(false)}
         />
       )}
@@ -266,19 +329,16 @@ function ControllerCard({
 }
 
 function InitConfirmModal({
-  instrument,
+  controllerId,
+  canConfirm,
   onConfirm,
   onCancel,
 }: {
-  instrument: Instrument;
+  controllerId: string;
+  canConfirm: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  const steps: string[] = [];
-  if (instrument.dome) steps.push("Open the dome");
-  if (instrument.mount) steps.push("Power on and enable the mount");
-  if (instrument.mirror_cover) steps.push("Open the mirror cover");
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
@@ -288,17 +348,9 @@ function InitConfirmModal({
         className="bg-panel-bg border border-panel-border rounded-lg p-5 max-w-sm w-full mx-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-sm font-semibold text-text-bright mb-2">
-          Initialize {instrument.id}?
+        <h3 className="text-sm font-semibold text-text-bright mb-4 break-all">
+          Initialize {controllerId}?
         </h3>
-        <p className="text-xs text-text-dim mb-3">Controller Init will:</p>
-        <ul className="text-xs text-text-bright space-y-1 mb-4 pl-4 list-disc">
-          {steps.length > 0 ? (
-            steps.map((s) => <li key={s}>{s}</li>)
-          ) : (
-            <li className="text-text-dim">(no orchestrated devices configured)</li>
-          )}
-        </ul>
         <div className="flex justify-end gap-2">
           <button
             onClick={onCancel}
@@ -308,7 +360,8 @@ function InitConfirmModal({
           </button>
           <button
             onClick={onConfirm}
-            className="py-1 px-3 pointer-coarse:py-2 rounded text-[11px] font-medium border bg-accent/30 text-text-bright border-accent/50 hover:bg-accent/50"
+            disabled={!canConfirm}
+            className="py-1 px-3 pointer-coarse:py-2 rounded text-[11px] font-medium border bg-accent/30 text-text-bright border-accent/50 hover:bg-accent/50 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Continue
           </button>
@@ -318,35 +371,109 @@ function InitConfirmModal({
   );
 }
 
-function ControllerDeviceChips({ instrument }: { instrument: Instrument }) {
-  // Role labels match the device-card kind headers (see KIND_LABELS) and the
-  // order matches KIND_ORDER (light-travel direction) so chips and the device
-  // cards below read top-to-bottom in the same sequence.
-  const chips: { role: string; id: string | null }[] = [
-    { role: "enclosure", id: instrument.dome },
-    { role: "mirror cover", id: instrument.mirror_cover },
-    { role: "mount", id: instrument.mount },
-    { role: "rotator", id: instrument.rotator },
-    { role: "focuser", id: instrument.focuser },
-    { role: "filter changer", id: instrument.filter_wheel },
-    { role: "camera", id: instrument.camera },
-  ].filter((c) => c.id);
+function ControllerInventory({
+  controller,
+  deviceIndex,
+}: {
+  controller: ControllerRow;
+  deviceIndex: Map<string, DeviceRow>;
+}) {
+  const instruments = controller.details?.instruments ?? [];
+  const baseDevices: ControllerDevice[] = [];
+  const devicesByInstrument = new Map<string, ControllerDevice[]>(
+    instruments.map(({ name }) => [name, []]),
+  );
 
-  if (chips.length === 0) {
-    return <div className="text-[10px] text-text-dim">No devices linked</div>;
+  for (const device of controller.devices) {
+    const archetype = archetypeOf(deviceIndex.get(device.id));
+    // A single chain cannot distinguish root devices until SensorKit publishes placement.
+    const showAtBase =
+      instruments.length === 1 && (archetype === "mount" || archetype === "enclosure");
+    const [instrumentName] = device.chains;
+    const instrumentDevices =
+      !showAtBase && device.chains.length === 1 && instrumentName !== undefined
+        ? devicesByInstrument.get(instrumentName)
+        : undefined;
+    (instrumentDevices ?? baseDevices).push(device);
   }
+
+  const deviceList = (devices: ControllerDevice[]) => (
+    <ul className="flex flex-col gap-0.5">
+      {[...devices]
+        .sort((a, b) =>
+          compareByArchetype(
+            { id: a.id, archetype: archetypeOf(deviceIndex.get(a.id)) },
+            { id: b.id, archetype: archetypeOf(deviceIndex.get(b.id)) },
+          ),
+        )
+        .map((device) => (
+          <InventoryDeviceRow key={device.id} device={device} row={deviceIndex.get(device.id)} />
+        ))}
+    </ul>
+  );
+
   return (
-    <div className="flex flex-wrap gap-1">
-      {chips.map((c) => (
-        <span
-          key={c.role}
-          className="text-[10px] bg-white/5 text-text-dim border border-panel-border rounded px-1.5 py-0.5"
-        >
-          <span className="uppercase tracking-wide">{c.role}</span>
-          <span className="text-text-bright font-mono ml-1 break-all">{c.id}</span>
-        </span>
-      ))}
+    <div className="flex flex-col gap-1.5">
+      {controller.devices.length === 0 ? (
+        <NoDevices />
+      ) : (
+        baseDevices.length > 0 && deviceList(baseDevices)
+      )}
+      {instruments.map((chain) => {
+        const devices = devicesByInstrument.get(chain.name);
+        return (
+          <div key={chain.name} className="flex flex-col gap-0.5 pt-1">
+            <div className="text-[11px] font-semibold leading-4 tracking-wide text-text-bright whitespace-pre-wrap break-all">
+              {chain.name}
+            </div>
+            {devices && devices.length > 0 && <div className="pl-2">{deviceList(devices)}</div>}
+          </div>
+        );
+      })}
     </div>
+  );
+}
+
+function NoDevices() {
+  return <span className="text-[10px] text-text-dim">No devices</span>;
+}
+
+function InventoryDeviceRow({
+  device,
+  row,
+}: {
+  device: ControllerDevice;
+  row: DeviceRow | undefined;
+}) {
+  const archetype = archetypeOf(row);
+  const label = archetypeLabel(archetype);
+  const title = [
+    `${label} · ${device.id}`,
+    row ? (row.online ? "Online" : "Offline") : "No device entity for this ID",
+    device.controlled ? "In controlled_devices" : "Not in controlled_devices",
+    device.chains.length > 0 ? `Instrument chains: ${device.chains.join(", ")}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <li title={title} className="flex min-w-0 items-center gap-1.5 py-0.5 text-[10px] text-text-dim">
+      <span className={`max-w-[45%] shrink-0 truncate ${archetypeLabelClass(archetype)}`}>
+        {label}
+      </span>
+      <span aria-hidden="true">·</span>
+      <span className="min-w-0 truncate font-mono text-text-bright">{device.id}</span>
+      {row ? (
+        <span
+          role="img"
+          aria-label={row.online ? "Online" : "Offline"}
+          className={`ml-auto size-1.5 shrink-0 rounded-full ${
+            row.online ? "bg-green-400" : "bg-white/20"
+          }`}
+        />
+      ) : (
+        <span className="ml-auto shrink-0">no entity</span>
+      )}
+    </li>
   );
 }
 
@@ -383,22 +510,38 @@ function truncate(s: string, n: number): string {
 
 // === Card shell ===
 
-function DeviceCard({
-  entity,
-  deviceState,
-}: {
-  entity: EntityListing;
-  deviceState: Record<string, unknown>;
-}) {
-  const caps = deviceState["Capabilities"] as Capabilities | undefined;
-  const kind = resolveDeviceKind(caps, entity.archetype, deviceState);
-  // SK auto-publishes the set of command_ids each device handles (derived from
-  // its registered @sk.command_handler functions) in
-  // EntityInfo.details.supported_commands. We thread this through to
-  // DirectActionRow to gate buttons. If the field is absent (older SK,
-  // transient load state), DirectActionRow falls open — shows all buttons —
-  // so deployments that don't publish capability info aren't silently muted.
-  const supportedCommands = entity.details?.["supported_commands"] as string[] | undefined;
+const EMPTY_STATE: Record<string, unknown> = {};
+
+interface DeviceBodyProps {
+  state: Record<string, unknown>;
+  deviceId: string;
+  /** Validated EntityInfo.details.supported_commands — gates direct actions. */
+  supportedCommands: string[];
+}
+
+/**
+ * Specialized card bodies by published archetype name (exact match). Any
+ * other archetype — or none — gets the generic body. No inference from
+ * traits, commands, or telemetry keywords.
+ */
+const ARCHETYPE_BODIES = new Map<string, (props: DeviceBodyProps) => React.ReactNode>([
+  ["mount", MountBody],
+  ["camera", CameraBody],
+  ["focuser", FocuserBody],
+  ["rotator", RotatorBody],
+  ["filter_changer", FilterChangerBody],
+  ["enclosure", EnclosureBody],
+  ["mirror_cover", MirrorCoverBody],
+  ["weather", WeatherBody],
+]);
+
+function DeviceCard({ row }: { row: DeviceRow }) {
+  // Per-card subscription: the entity's own keyword map only changes identity
+  // when one of its records arrives, so other devices' telemetry is ignored.
+  const deviceState = useSensorKitStore((s) => s.state[row.id]) ?? EMPTY_STATE;
+  const { details } = row;
+  const archetype = details?.archetype ?? null;
+  const Body = archetype !== null ? ARCHETYPE_BODIES.get(archetype) : undefined;
   const connected =
     (deviceState["Connected"] as { is_connected: boolean } | undefined)?.is_connected ?? null;
   const enabled =
@@ -412,11 +555,15 @@ function DeviceCard({
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-sm text-text-bright font-semibold truncate">{entity.name}</div>
-          <div className="text-[10px] text-text-dim uppercase tracking-wide">{KIND_LABELS[kind] ?? kind}</div>
+          <div className="text-sm text-text-bright font-semibold truncate">{row.id}</div>
+          <div
+            className={`text-[10px] text-text-dim break-all ${archetypeLabelClass(archetype)}`}
+          >
+            {details ? archetypeLabel(archetype) : "device · details unavailable"}
+          </div>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <Pill label={entity.online ? "online" : "offline"} tone={entity.online ? "good" : "off"} />
+          <Pill label={row.online ? "online" : "offline"} tone={row.online ? "good" : "off"} />
           <Pill
             label={connected === null ? "—" : connected ? "connected" : "disconnected"}
             tone={connected ? "good" : connected === false ? "bad" : "off"}
@@ -429,66 +576,17 @@ function DeviceCard({
       </div>
 
       {/* Body */}
-      <DeviceBody
-        kind={kind}
-        state={deviceState}
-        deviceId={entity.name}
-        supportedCommands={supportedCommands}
-      />
+      {Body && details ? (
+        <Body
+          state={deviceState}
+          deviceId={row.id}
+          supportedCommands={details.supported_commands}
+        />
+      ) : (
+        <GenericBody state={deviceState} />
+      )}
     </div>
   );
-}
-
-function DeviceBody({
-  kind,
-  state,
-  deviceId,
-  supportedCommands,
-}: {
-  kind: string;
-  state: Record<string, unknown>;
-  deviceId: string;
-  supportedCommands: string[] | undefined;
-}) {
-  switch (kind) {
-    case "mount":
-      return <MountBody state={state} deviceId={deviceId} supportedCommands={supportedCommands} />;
-    case "camera":
-      return <CameraBody state={state} deviceId={deviceId} supportedCommands={supportedCommands} />;
-    case "focuser":
-      return <FocuserBody state={state} deviceId={deviceId} supportedCommands={supportedCommands} />;
-    case "rotator":
-      return <RotatorBody state={state} deviceId={deviceId} supportedCommands={supportedCommands} />;
-    case "filter_changer":
-      return <FilterChangerBody state={state} deviceId={deviceId} supportedCommands={supportedCommands} />;
-    case "enclosure":
-      return <EnclosureBody state={state} deviceId={deviceId} supportedCommands={supportedCommands} />;
-    case "mirror_cover":
-      return <MirrorCoverBody state={state} deviceId={deviceId} supportedCommands={supportedCommands} />;
-    case "weather":
-      return <WeatherBody state={state} />;
-    default:
-      return <GenericBody state={state} />;
-  }
-}
-
-// Resolve a device kind in a way that's robust to partial telemetry.
-// Precedence: published Capabilities.device_type → entity archetype →
-// inference from state keywords (e.g. BasicWeather → weather). Falls back
-// to "device" if no signal is available yet.
-function resolveDeviceKind(
-  caps: Capabilities | undefined,
-  archetype: string | null | undefined,
-  state: Record<string, unknown>,
-): string {
-  if (caps?.device_type) return caps.device_type;
-  if (archetype) return archetype;
-  if ("BasicWeather" in state) return "weather";
-  if ("RADecPointing" in state || "AltAzPointing" in state || "MountAxisEnabled" in state)
-    return "mount";
-  if ("CameraTelemetry" in state || "CameraCurrentSettings" in state) return "camera";
-  if ("Opened" in state) return "enclosure";
-  return "device";
 }
 
 // Hook + row used to render per-device action buttons when direct device
@@ -504,12 +602,10 @@ function DirectActionRow({
 }: {
   deviceId: string;
   actions: DirectAction[];
-  // Set of command_ids the target device handles, from
-  // EntityInfo.details.supported_commands. When provided, actions whose cmd()
-  // produces a command_id outside this set are filtered out. When undefined
-  // (older SK, transient load state), no filtering happens — fall open rather
-  // than hiding all controls.
-  supportedCommands?: string[];
+  // command_ids the target device handles, from validated
+  // EntityInfo.details.supported_commands. Actions whose cmd() produces a
+  // command_id outside this list are hidden.
+  supportedCommands: string[];
   // Drop the top border + extra padding when this row stacks directly below
   // another action row (so the two read as one block instead of two).
   noTopBorder?: boolean;
@@ -519,12 +615,10 @@ function DirectActionRow({
 
   if (!enabled) return null;
 
-  const visibleActions = supportedCommands
-    ? actions.filter((a) => {
-        const id = (a.cmd() as { command_id?: string }).command_id;
-        return id ? supportedCommands.includes(id) : true;
-      })
-    : actions;
+  const visibleActions = actions.filter((a) => {
+    const id = (a.cmd() as { command_id?: string }).command_id;
+    return id !== undefined && supportedCommands.includes(id);
+  });
 
   if (visibleActions.length === 0) return null;
 
@@ -611,7 +705,7 @@ function MountBody({
 }: {
   state: Record<string, unknown>;
   deviceId: string;
-  supportedCommands: string[] | undefined;
+  supportedCommands: string[];
 }) {
   const radec = state["RADecPointing"] as RADecPointing | undefined;
   const altaz = state["AltAzPointing"] as AltAzPointing | undefined;
@@ -721,7 +815,7 @@ function CameraBody({
 }: {
   state: Record<string, unknown>;
   deviceId: string;
-  supportedCommands: string[] | undefined;
+  supportedCommands: string[];
 }) {
   const tel = state["CameraTelemetry"] as CameraTelemetry | undefined;
   const cur = state["CameraCurrentSettings"] as CameraCurrentSettings | undefined;
@@ -801,7 +895,7 @@ function FocuserBody({
 }: {
   state: Record<string, unknown>;
   deviceId: string;
-  supportedCommands: string[] | undefined;
+  supportedCommands: string[];
 }) {
   const pos = state["FocusPosition"] as
     | { current_position: number; base_position?: number | null }
@@ -844,7 +938,7 @@ function PositionChangeControl({
 }: {
   deviceId: string;
   currentPosition: number | undefined;
-  supportedCommands: string[] | undefined;
+  supportedCommands: string[];
   // command_id this control will send. Used for the gating check too.
   commandId: string;
   buildCommand: (position: number) => unknown;
@@ -858,9 +952,7 @@ function PositionChangeControl({
   const [status, setStatus] = useState<ActionStatus>({ phase: "idle" });
 
   if (!directControl) return null;
-  // Falls open when supportedCommands is undefined (older SK / transient load).
-  const supported = supportedCommands ? supportedCommands.includes(commandId) : true;
-  if (!supported) return null;
+  if (!supportedCommands.includes(commandId)) return null;
 
   const busy = status.phase === "pending";
   const trimmed = target.trim();
@@ -942,7 +1034,7 @@ function RotatorBody({
 }: {
   state: Record<string, unknown>;
   deviceId: string;
-  supportedCommands: string[] | undefined;
+  supportedCommands: string[];
 }) {
   const pos = state["RotatorPosition"] as { position: number } | undefined;
   return (
@@ -982,7 +1074,7 @@ function FilterChangerBody({
 }: {
   state: Record<string, unknown>;
   deviceId: string;
-  supportedCommands: string[] | undefined;
+  supportedCommands: string[];
 }) {
   const current = state["Filter"] as FilterEntry | undefined;
   const all = state["Filters"] as { filters: FilterEntry[] } | undefined;
@@ -993,8 +1085,7 @@ function FilterChangerBody({
     return <div className="text-[10px] text-text-dim">No filters reported</div>;
   }
 
-  // Falls open when supportedCommands is undefined (older SK / transient load).
-  const canSetFilter = supportedCommands ? supportedCommands.includes("SetFilter") : true;
+  const canSetFilter = supportedCommands.includes("SetFilter");
   const busy = status.phase === "pending";
 
   const select = async (f: FilterEntry) => {
@@ -1074,7 +1165,7 @@ function EnclosureBody({
 }: {
   state: Record<string, unknown>;
   deviceId: string;
-  supportedCommands: string[] | undefined;
+  supportedCommands: string[];
 }) {
   const opened = state["Opened"] as { is_open: boolean } | undefined;
   const altaz = state["AltAzPointing"] as AltAzPointing | undefined;
@@ -1114,7 +1205,7 @@ function MirrorCoverBody({
 }: {
   state: Record<string, unknown>;
   deviceId: string;
-  supportedCommands: string[] | undefined;
+  supportedCommands: string[];
 }) {
   const opened = state["Opened"] as { is_open: boolean } | undefined;
   return (
