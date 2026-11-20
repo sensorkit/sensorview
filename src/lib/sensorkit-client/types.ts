@@ -146,14 +146,6 @@ export interface DeviceState {
   enable_state: EnableState;
 }
 
-export interface Capabilities {
-  type: "controller" | "device" | "program";
-  commands?: string[];
-  tasks?: string[];
-  devices?: Record<string, string | null>;
-  device_type?: string;
-}
-
 export interface EntityLease {
   acquired_at: string;
   refreshed_at: string;

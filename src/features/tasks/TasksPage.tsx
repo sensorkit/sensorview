@@ -12,11 +12,17 @@ import {
 import type {
   AgentCapabilities,
   AgentState,
-  Capabilities,
   EntityListing,
   ScheduleEntry,
 } from "../../lib/sensorkit-client/types";
 import { useEntities } from "../../lib/sensorkit-client/instruments";
+import {
+  normalizeCameraParams,
+  progressCameraOf,
+  useControllers,
+  type CameraSequenceRef,
+  type ControllerRow,
+} from "../../lib/sensorkit-client/entities";
 import { ScheduleStrip } from "./ScheduleStrip";
 import { VCurvePlot } from "./VCurvePlot";
 import { findAutofocusEntity, useVCurveData, type VCurveData } from "./vcurveData";
@@ -32,9 +38,9 @@ interface TaskFinishedRecord {
 
 // === Task payload shape (best-effort — SK types may vary) ===
 
-interface CameraParams {
+/** One camera sequence's requested settings (SK `CameraParameterSet`). */
+interface CameraParams extends CameraSequenceRef {
   integration_time_seconds?: number;
-  frame_count?: number;
   binning_x?: number | null;
   binning_y?: number | null;
   gain?: number | null;
@@ -47,7 +53,8 @@ interface TaskPayload {
   task_type?: string;
   end_time?: string;
   target?: Record<string, unknown>;
-  camera_params?: CameraParams;
+  /** A single camera parameter set or an array for concurrent sequences. */
+  camera_params?: unknown;
   sidereal_frames?: number[];
   [k: string]: unknown;
 }
@@ -92,10 +99,10 @@ export function TasksPage() {
   // Live entity listing (self-heals as programs/controllers register after an
   // SK restart), not the /entities snapshot that only refetches on reconnect.
   const entities = useEntities();
+  const controllers = useControllers();
   const state = useSensorKitStore((s) => s.state);
   const connection = useSensorKitStore((s) => s.connection);
 
-  const controllers = entities.filter((e) => e.entity_type === "controller");
   const programs = entities.filter((e) => e.entity_type === "program");
 
   const agentState = useSensorKitStore((s) => s.getAgentState)() ?? undefined;
@@ -152,19 +159,27 @@ export function TasksPage() {
           ) : (
             <div className="space-y-3">
               {controllers.map((c) => {
-                const caps = state[c.name]?.["Capabilities"] as Capabilities | undefined;
-                const cameraId = caps?.devices?.["camera"];
-                const cameraTel =
-                  cameraId
-                    ? (state[cameraId]?.["CameraTelemetry"] as CameraTelemetry | undefined)
-                    : undefined;
+                const controllerState = state[c.id]?.["ControllerState"] as
+                  | ControllerState
+                  | undefined;
+                const ex = controllerState?.execution_state;
+                // Progress camera for a running task on a leased controller;
+                // null when no single live camera resolves.
+                const cameraId =
+                  c.online && ex?.executing && ex.execution
+                    ? progressCameraOf(c.details, ex.execution.task?.camera_params, state)
+                    : null;
+                const cameraTel = cameraId
+                  ? (state[cameraId]?.["CameraTelemetry"] as CameraTelemetry | undefined)
+                  : undefined;
                 return (
                   <ControllerCard
-                    key={c.name}
-                    entity={c}
-                    controllerState={state[c.name]?.["ControllerState"] as ControllerState | undefined}
-                    scheduleWindows={agentState?.scheduler_state.schedule?.[c.name] ?? []}
+                    key={c.id}
+                    controller={c}
+                    controllerState={controllerState}
+                    scheduleWindows={agentState?.scheduler_state.schedule?.[c.id] ?? []}
                     agentCapabilities={agentCapabilities}
+                    cameraId={cameraId}
                     cameraTelemetry={cameraTel}
                   />
                 );
@@ -226,16 +241,19 @@ interface CameraTelemetry {
 }
 
 function ControllerCard({
-  entity,
+  controller,
   controllerState,
   scheduleWindows,
   agentCapabilities,
+  cameraId,
   cameraTelemetry,
 }: {
-  entity: EntityListing;
+  controller: ControllerRow;
   controllerState: ControllerState | undefined;
   scheduleWindows: ScheduleEntry[];
   agentCapabilities: AgentCapabilities | null;
+  /** Live camera whose progress represents the running task, or null. */
+  cameraId: string | null;
   cameraTelemetry: CameraTelemetry | undefined;
 }) {
   const now = useNow();
@@ -254,10 +272,13 @@ function ControllerCard({
     <div className="bg-panel-bg/60 border border-panel-border rounded-lg p-3 space-y-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-sm text-text-bright font-semibold truncate">{entity.name}</div>
+          <div className="text-sm text-text-bright font-semibold truncate">{controller.id}</div>
         </div>
         <div className="flex flex-col items-end gap-1">
-          <Pill label={entity.online ? "online" : "offline"} tone={entity.online ? "good" : "off"} />
+          <Pill
+            label={controller.online ? "online" : "offline"}
+            tone={controller.online ? "good" : "off"}
+          />
           {controllerState && (
             <Pill
               label={controllerState.enable_state.enabled ? "enabled" : "disabled"}
@@ -308,6 +329,7 @@ function ControllerCard({
           taskId={currentTaskId}
           context={ex.context}
           now={now}
+          cameraId={cameraId}
           cameraTel={cameraTelemetry}
         />
       )}
@@ -320,7 +342,7 @@ function ControllerCard({
           <div className="text-xs text-text-dim">No scheduled windows.</div>
         ) : (
           <ScheduleStrip
-            controllerName={entity.name}
+            controllerName={controller.id}
             schedule={scheduleWindows}
             agentCapabilities={agentCapabilities}
           />
@@ -340,7 +362,7 @@ function ProgramCard({
   entity: EntityListing;
   programState: ProgramState | undefined;
   excluded: boolean;
-  controllers: EntityListing[];
+  controllers: ControllerRow[];
   /** Analyzer entity behind this program, or null when it isn't an autofocus program. */
   autofocusEntity: string | null;
 }) {
@@ -358,7 +380,7 @@ function ProgramCard({
   // exactly one. Otherwise leave the choice to the server (which 422s if
   // none was previously associated).
   const fallbackController =
-    controllers.length === 1 ? controllers[0]?.name : undefined;
+    controllers.length === 1 ? controllers[0]?.id : undefined;
 
   const onToggleEnable = async () => {
     setBusy("enable");
@@ -666,34 +688,42 @@ function TaskDetails({
   taskId,
   context,
   now,
+  cameraId,
   cameraTel,
 }: {
   task: TaskPayload;
   taskId: string | null;
   context: Record<string, unknown> | null;
   now: Date;
+  /** Resolved progress camera; null hides frame and exposure progress. */
+  cameraId: string | null;
   cameraTel: CameraTelemetry | undefined;
 }) {
   const target = describeTarget(task.target, context);
-  const cp = task.camera_params ?? {};
+  // Show full settings for one sequence and requested frame counts for concurrent sequences.
+  const sequences = normalizeCameraParams(task.camera_params) ?? [];
+  const cp: CameraParams = sequences.length === 1 ? sequences[0]! : {};
+  const concurrent = sequences.length > 1 ? labelSequences(sequences) : [];
   const endTime = task.end_time ? new Date(task.end_time) : null;
   const remaining = endTime ? endTime.getTime() - now.getTime() : null;
 
   // Prefer SK's authoritative frame_num from the task context; useFrameIndex
-  // falls back to telemetry-edge counting only when context is absent.
+  // falls back to telemetry-edge counting only when context is absent. Both
+  // are scoped to the resolved camera: with none, there is no frame index.
   const frameIndex = useFrameIndex(
     taskId,
     cameraTel,
     context as { frame_num?: number | null } | null,
+    cameraId,
   );
-  const totalFrames = cp.frame_count ?? null;
+  const totalFrames = typeof cp.frame_count === "number" ? cp.frame_count : null;
   const framePct =
     totalFrames && frameIndex !== null
       ? (frameIndex / totalFrames) * 100
       : null;
   const exposurePct = cameraTel?.percent_completed ?? null;
 
-  const trackMode = describeTrackMode(task, frameIndex);
+  const trackMode = describeTrackMode(task, frameIndex, totalFrames);
 
   const ctxRows = context
     ? Object.entries(context)
@@ -725,6 +755,25 @@ function TaskDetails({
         {cp.gain != null && <DetailRow label="Gain" value={`${cp.gain}`} />}
         {cp.frame_type && <DetailRow label="Frame type" value={cp.frame_type} />}
         {cp.filter_name && <DetailRow label="Filter" value={cp.filter_name} />}
+        {concurrent.length > 0 && (
+          <div className="sm:col-span-2 space-y-0.5">
+            <div className="text-text-dim">Sequences</div>
+            {concurrent.map((s, i) => (
+              <div key={i} className="flex gap-2 min-w-0 pl-2">
+                {/* Preserve whitespace in published instrument names. */}
+                <span
+                  className="text-text-bright overflow-hidden text-ellipsis whitespace-pre"
+                  title={s.label}
+                >
+                  {s.label}
+                </span>
+                <span className="text-text-dim font-mono shrink-0">
+                  {s.frames === null ? "—" : `${s.frames} ${s.frames === 1 ? "frame" : "frames"}`}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
         {endTime && (
           <DetailRow
             label="Deadline"
@@ -786,7 +835,34 @@ function ProgressBar({
 }
 
 
-function describeTrackMode(task: TaskPayload, frameIndex: number | null): string | null {
+/**
+ * Label each concurrent sequence by its instrument, or "Automatic" when it
+ * names none, in wire order. A label shared by several sequences gets its
+ * 1-based position so they stay distinguishable.
+ */
+function labelSequences(
+  sequences: CameraSequenceRef[],
+): { label: string; frames: number | null }[] {
+  const base = sequences.map((s) =>
+    typeof s.instrument === "string" ? s.instrument : "Automatic",
+  );
+  const uses = new Map<string, number>();
+  for (const b of base) uses.set(b, (uses.get(b) ?? 0) + 1);
+  return sequences.map((s, i) => ({
+    label: uses.get(base[i]!)! > 1 ? `${base[i]} #${i + 1}` : base[i]!,
+    frames: typeof s.frame_count === "number" ? s.frame_count : null,
+  }));
+}
+
+/**
+ * Use the single sequence's frame count to identify a trailing sidereal span.
+ * For concurrent sequences, list the requested sidereal frame numbers.
+ */
+function describeTrackMode(
+  task: TaskPayload,
+  frameIndex: number | null,
+  total: number | null,
+): string | null {
   const targetType = (task.target?.target_type as string | undefined) ?? null;
   const baseLabel = labelFromTargetType(targetType);
 
@@ -796,7 +872,6 @@ function describeTrackMode(task: TaskPayload, frameIndex: number | null): string
   // SK encodes frame indices 0-based; display 1-based.
   const human = (i: number) => i + 1;
   const sorted = [...new Set(frames)].sort((a, b) => a - b);
-  const total = task.camera_params?.frame_count ?? null;
 
   // A trailing contiguous block (N..last) reads as a one-way switch to sidereal,
   // matching the pre-`sidereal_frames` "switched at frame N" wording. The common
