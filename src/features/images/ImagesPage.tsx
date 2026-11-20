@@ -10,7 +10,7 @@ import { usePaneResize } from "../panels/usePaneResize";
 import { findDark, findFlat, type CalCandidate, type MatchResult } from "./calMatch";
 import { Toggle } from "../settings/Toggle";
 import { useSensorKitStore } from "../../stores/sensorkit";
-import { useEntities } from "../../lib/sensorkit-client/instruments";
+import { useControllers } from "../../lib/sensorkit-client/entities";
 import { useUIPanelsStore } from "../../stores/uiPanels";
 import {
   ProductListingNotReady,
@@ -100,9 +100,9 @@ export function ImagesPage() {
   const setProductCatalog = useSensorKitStore((s) => s.setProductCatalog);
   const mergeProductHeaders = useSensorKitStore((s) => s.mergeProductHeaders);
   // Live listing so a controller coming online after an SK restart appears in
-  // the picker without a manual refresh (only name/online are read here).
-  const entities = useEntities();
-  const selectedInstrumentId = useSensorKitStore((s) => s.selectedInstrumentId);
+  // the picker without a manual refresh (only id/online are read here).
+  const controllers = useControllers();
+  const selectedControllerId = useSensorKitStore((s) => s.selectedControllerId);
   const connection = useSensorKitStore((s) => s.connection);
   const latestProduct = useSensorKitStore((s) => s.latestProduct);
 
@@ -135,16 +135,13 @@ export function ImagesPage() {
     invert: true,
   });
 
-  const controllers = useMemo(
-    () => entities.filter((e) => e.entity_type === "controller"),
-    [entities],
-  );
+  // Per-page override first, then SkyView's selected controller.
   const [controllerOverride, setControllerOverride] = useState<string | null>(null);
   const activeControllerId =
     controllerOverride ??
-    selectedInstrumentId ??
-    controllers.find((c) => c.online)?.name ??
-    controllers[0]?.name ??
+    selectedControllerId ??
+    controllers.find((c) => c.online)?.id ??
+    controllers[0]?.id ??
     null;
 
   const compact = useCompactLayout();
@@ -160,7 +157,7 @@ export function ImagesPage() {
    */
   const groupIds = useMemo(() => {
     const ids = new Set([...Object.keys(products), ...Object.keys(productCatalog)]);
-    for (const c of controllers) ids.add(c.name);
+    for (const c of controllers) ids.add(c.id);
     return [...ids].sort();
   }, [products, productCatalog, controllers]);
   const groupIdsKey = groupIds.join(" ");
@@ -467,8 +464,8 @@ export function ImagesPage() {
                 className="max-w-[60vw] rounded border border-panel-border bg-panel-bg/60 px-2 py-1 pointer-coarse:py-2 text-xs text-text-bright"
               >
                 {controllers.map((c) => (
-                  <option key={c.name} value={c.name}>
-                    {c.name}
+                  <option key={c.id} value={c.id}>
+                    {c.id}
                     {c.online ? "" : " (offline)"}
                   </option>
                 ))}

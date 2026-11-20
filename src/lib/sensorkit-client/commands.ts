@@ -194,6 +194,12 @@ export interface CameraParameterSet {
   readout_mode?: number | null;
   frame_type?: "light" | "dark" | "bias" | "flat" | null;
   filter_name?: string | null;
+  /**
+   * Registered instrument chain name on the executing controller, matched
+   * literally (case and whitespace matter). Null/absent leaves the chain to
+   * the controller.
+   */
+  instrument?: string | null;
 }
 
 // SK split `Task` into a semantic task + a server-minted `TaskExecution`
@@ -203,7 +209,8 @@ export interface CameraParameterSet {
 export interface StandardCollectTask {
   task_type: "standard_collect";
   target: Target;
-  camera_params: CameraParameterSet;
+  /** One sequence, or concurrent sequences (one per instrument chain). */
+  camera_params: CameraParameterSet | CameraParameterSet[];
   /**
    * 0-based frame indices captured under sidereal tracking. Frames not listed
    * follow the target; the mount switches in both directions on transitions.

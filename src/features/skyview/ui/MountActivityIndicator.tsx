@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   isMountNotReady,
+  resolveActiveController,
+  useControllerMounts,
   useMountActivities,
   useMountPointings,
   type MountActivity,
-  type InstrumentPointing,
+  type MountPointing,
 } from "../../../lib/sensorkit-client/instruments";
 import { useSensorKitStore, type StateMap } from "../../../stores/sensorkit";
 import { useFrameIndex } from "../hooks/useFrameIndex";
@@ -13,24 +15,23 @@ const EMPTY_STATE: StateMap = {};
 
 /**
  * Compact activity indicator for the status bar with a rich popup on click.
- * Shows the current mount state for the active instrument ("idle", "slewing X",
- * "tracking Y", "collecting 2/7"). Clicking opens a panel with per-instrument
- * details and an instrument selector when more than one is present.
+ * Shows the current mount state for the active controller ("idle", "slewing X",
+ * "tracking Y", "collecting 2/7"). Clicking opens a panel with per-controller
+ * details and a controller selector when more than one is present.
  */
 export function MountActivityIndicator() {
+  const controllers = useControllerMounts();
   const activities = useMountActivities();
   const pointings = useMountPointings();
-  const selectedInstrumentId = useSensorKitStore((s) => s.selectedInstrumentId);
-  const setSelectedInstrumentId = useSensorKitStore((s) => s.setSelectedInstrumentId);
+  const selectedControllerId = useSensorKitStore((s) => s.selectedControllerId);
+  const setSelectedControllerId = useSensorKitStore((s) => s.setSelectedControllerId);
 
+  // Same resolution (and live mount usability) as SkyView's action controls,
+  // so both show one selection.
   const active = useMemo<MountActivity | null>(() => {
-    if (activities.length === 0) return null;
-    if (selectedInstrumentId) {
-      const a = activities.find((x) => x.instrumentId === selectedInstrumentId);
-      if (a) return a;
-    }
-    return activities.find((a) => a.kind !== "offline") ?? activities[0] ?? null;
-  }, [activities, selectedInstrumentId]);
+    const id = resolveActiveController(controllers, selectedControllerId)?.id;
+    return activities.find((a) => a.controllerId === id) ?? null;
+  }, [controllers, activities, selectedControllerId]);
 
   // Targeted subscriptions — never the whole `state` map (fresh identity per
   // telemetry flush). These payload references only change when the specific
@@ -44,7 +45,7 @@ export function MountActivityIndicator() {
   );
   const controllerState = useSensorKitStore((s) =>
     active
-      ? (s.state[active.instrumentId]?.["ControllerState"] as
+      ? (s.state[active.controllerId]?.["ControllerState"] as
           | { execution_state?: { context?: { frame_num?: number } | null } }
           | undefined)
       : undefined,
@@ -56,11 +57,12 @@ export function MountActivityIndicator() {
     active?.taskId ?? null,
     cameraTel,
     activeContext,
+    active?.cameraId ?? null,
   );
 
   const [open, setOpen] = useState(false);
-  // The rich per-instrument popup wants live camera/task detail across ALL
-  // instruments. Subscribing to the whole `state` map permanently would
+  // The rich per-controller popup wants live camera/task detail across ALL
+  // controllers. Subscribing to the whole `state` map permanently would
   // re-render this component on every telemetry flush, so only do it while
   // the popup is actually open (a transient, user-initiated window); closed,
   // the selector returns a constant and never re-renders.
@@ -101,10 +103,10 @@ export function MountActivityIndicator() {
       {open && (
         <div className="fixed inset-x-2 bottom-12 lg:absolute lg:inset-x-auto lg:bottom-full lg:right-0 lg:mb-1 lg:w-80 z-30 rounded-lg border border-panel-border bg-panel-bg/95 backdrop-blur-md shadow-xl p-2 text-xs space-y-1">
           {activities.map((a) => (
-            <InstrumentPanel
-              key={a.instrumentId}
+            <ControllerPanel
+              key={a.controllerId}
               activity={a}
-              pointing={pointings.find((p) => p.instrumentId === a.instrumentId) ?? null}
+              pointing={pointings.find((p) => p.controllerId === a.controllerId) ?? null}
               cameraTel={
                 a.cameraId
                   ? (state[a.cameraId]?.["CameraTelemetry"] as
@@ -113,13 +115,13 @@ export function MountActivityIndicator() {
                   : undefined
               }
               taskContext={
-                (state[a.instrumentId]?.["ControllerState"] as
+                (state[a.controllerId]?.["ControllerState"] as
                   | { execution_state?: { context?: { frame_num?: number } | null } }
                   | undefined)?.execution_state?.context ?? null
               }
-              isActive={a.instrumentId === active.instrumentId}
+              isActive={a.controllerId === active.controllerId}
               onPick={() => {
-                setSelectedInstrumentId(a.instrumentId);
+                setSelectedControllerId(a.controllerId);
                 setOpen(false);
               }}
             />
@@ -130,7 +132,7 @@ export function MountActivityIndicator() {
   );
 }
 
-function InstrumentPanel({
+function ControllerPanel({
   activity,
   pointing,
   cameraTel,
@@ -139,13 +141,18 @@ function InstrumentPanel({
   onPick,
 }: {
   activity: MountActivity;
-  pointing: InstrumentPointing | null;
+  pointing: MountPointing | null;
   cameraTel: { percent_completed: number | null } | undefined;
   taskContext: { frame_num?: number | null } | null;
   isActive: boolean;
   onPick: () => void;
 }) {
-  const frameIndex = useFrameIndex(activity.taskId, cameraTel, taskContext);
+  const frameIndex = useFrameIndex(
+    activity.taskId,
+    cameraTel,
+    taskContext,
+    activity.cameraId,
+  );
 
   // Pull axis-error info for slewing state
   const targetErr = null as number | null; // reserved for future enrichment
@@ -162,7 +169,7 @@ function InstrumentPanel({
       <div className="flex items-center gap-2">
         <StatusDot kind={activity.kind} />
         <span className="font-mono text-text-bright truncate">
-          {activity.instrumentId}
+          {activity.controllerId}
         </span>
         <span className="ml-auto text-[10px] uppercase tracking-wide text-text-dim">
           {activity.kind.replace(/_/g, " ")}
@@ -172,6 +179,12 @@ function InstrumentPanel({
       <div className="mt-1 pl-4 space-y-0.5 text-[11px]">
         {activity.detail && (
           <Row label="Target" value={activity.detail} />
+        )}
+        {activity.mountCandidateCount > 1 && (
+          <Row
+            label="Mount"
+            value={`${activity.mountCandidateCount} candidates (ambiguous)`}
+          />
         )}
         {pointing?.radec && (
           <Row
@@ -191,20 +204,29 @@ function InstrumentPanel({
             value={`${pointing.targetDistanceArcsec.toFixed(2)}″`}
           />
         )}
-        {activity.kind === "collecting" && activity.frameTotal && (
+        {activity.kind === "collecting" && (
           <div className="mt-1 space-y-0.5">
-            <Row
-              label="Frame"
-              value={`${frameIndex != null ? frameIndex + 1 : "?"} / ${activity.frameTotal}`}
-            />
-            {activity.frameTotal > 0 && frameIndex != null && (
-              <Bar
-                pct={(frameIndex / activity.frameTotal) * 100}
-                color="bg-blue-400"
-              />
+            {/* Counters only for a resolved camera sequence with a known frame. */}
+            {frameIndex != null && activity.frameTotal != null && (
+              <>
+                <Row label="Frame" value={`${frameIndex + 1} / ${activity.frameTotal}`} />
+                {activity.frameTotal > 0 && (
+                  <Bar
+                    pct={(frameIndex / activity.frameTotal) * 100}
+                    color="bg-blue-400"
+                  />
+                )}
+              </>
             )}
-            {cameraTel?.percent_completed != null && (
-              <Bar pct={cameraTel.percent_completed} color="bg-orange-400" />
+            {/* Measured exposure from the resolved live camera only. */}
+            {activity.cameraId && cameraTel?.percent_completed != null && (
+              <>
+                <Row
+                  label="Exposure"
+                  value={`${Math.round(cameraTel.percent_completed)}%`}
+                />
+                <Bar pct={cameraTel.percent_completed} color="bg-orange-400" />
+              </>
             )}
             {activity.taskId && (
               <div className="text-[10px] text-text-dim font-mono truncate" title={activity.taskId}>
@@ -258,7 +280,7 @@ function StatusDot({ kind }: { kind: MountActivity["kind"] }) {
                 kind === "shutting_down" ||
                 kind === "executing"
               ? "bg-amber-400 animate-pulse"
-              : isMountNotReady(kind)
+              : isMountNotReady(kind) || kind === "mount_ambiguous"
                 ? "bg-amber-400"
                 : "bg-red-400";
   return <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cls}`} />;
@@ -266,37 +288,40 @@ function StatusDot({ kind }: { kind: MountActivity["kind"] }) {
 
 function describeActivity(a: MountActivity, frameIndex: number | null): string {
   const label = a.detail ? ` ${a.detail}` : "";
+  const id = a.controllerId;
   switch (a.kind) {
     case "idle":
-      return `${a.instrumentId} · idle`;
+      return `${id} · idle`;
     case "offline":
-      return `${a.instrumentId} · offline`;
+      return `${id} · offline`;
     case "slewing":
-      return `${a.instrumentId} · slewing${a.detail ? ` → ${a.detail}` : ""}`;
+      return `${id} · slewing${a.detail ? ` → ${a.detail}` : ""}`;
     case "tracking":
-      return `${a.instrumentId} · tracking${label}`;
+      return `${id} · tracking${label}`;
     case "initializing":
-      return `${a.instrumentId} · initializing`;
+      return `${id} · initializing`;
     case "shutting_down":
-      return `${a.instrumentId} · shutting down`;
+      return `${id} · shutting down`;
     case "executing":
       // `detail` carries the SK task_type (e.g. "standby", "calibrate",
       // "recover"). For unknown / null types fall back to a bare verb so
       // we don't render a trailing space.
-      return `${a.instrumentId} · ${a.detail ?? "executing"}`;
-    case "collecting": {
-      const n = frameIndex != null ? frameIndex + 1 : "?";
-      const m = a.frameTotal ?? "?";
-      return `${a.instrumentId} · collecting ${n}/${m}`;
-    }
+      return `${id} · ${a.detail ?? "executing"}`;
+    case "collecting":
+      // Counter only when task, camera, and frame are all resolved.
+      return frameIndex != null && a.frameTotal != null
+        ? `${id} · collecting ${frameIndex + 1}/${a.frameTotal}`
+        : `${id} · collecting`;
     // Mount present but unable to act. Each maps to a specific SK signal
     // (Connected / DeviceState.enable_state / MountAxisEnabled) rather than
     // collapsing into "idle", which would imply a healthy mount sitting still.
     case "mount_disconnected":
-      return `${a.instrumentId} · mount disconnected`;
+      return `${id} · mount disconnected`;
     case "mount_disabled":
-      return `${a.instrumentId} · mount disabled`;
+      return `${id} · mount disabled`;
     case "mount_uninitialized":
-      return `${a.instrumentId} · mount uninitialized`;
+      return `${id} · mount uninitialized`;
+    case "mount_ambiguous":
+      return `${id} · ${a.mountCandidateCount} mounts`;
   }
 }

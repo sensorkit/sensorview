@@ -28,7 +28,7 @@ export type LatestProduct = {
   registerTime?: string;
 };
 
-/** What a given instrument has been commanded to follow. */
+/** What a given controller's mount has been commanded to follow. */
 export type TrackedMountTarget =
   | {
       kind: "satellite";
@@ -66,9 +66,9 @@ export interface SensorKitStore {
   productHeaders: Record<string, Record<string, ProductMetadata>>;
   /** Newest product across all controllers — drives the latest-image pop-out. null until one arrives. */
   latestProduct: LatestProduct | null;
-  /** User-chosen controller (instrument). null = auto (first online). */
-  selectedInstrumentId: string | null;
-  /** Last target commanded per instrument, keyed by controller id. */
+  /** User-chosen controller. null = auto (see resolveActiveController). */
+  selectedControllerId: string | null;
+  /** Last target commanded per controller, keyed by controller id. */
   mountTargets: Record<string, TrackedMountTarget>;
 
   setConnection: (status: ConnectionStatus, error?: string) => void;
@@ -96,8 +96,8 @@ export interface SensorKitStore {
     headers: Record<string, ProductMetadata>,
   ) => void;
   resetState: () => void;
-  setSelectedInstrumentId: (id: string | null) => void;
-  setMountTarget: (instrumentId: string, target: TrackedMountTarget | null) => void;
+  setSelectedControllerId: (id: string | null) => void;
+  setMountTarget: (controllerId: string, target: TrackedMountTarget | null) => void;
 
   getState: <T = unknown>(entityId: string, prop: string) => T | null;
   /** Products for a controller, newest first. */
@@ -105,6 +105,13 @@ export interface SensorKitStore {
   getSitePosition: () => SitePosition | null;
   getAgentState: () => AgentState | null;
   getAgentCapabilities: () => AgentCapabilities | null;
+}
+
+/** Version-1 persisted shape. Field names are on-disk contract. */
+interface PersistedSensorKit {
+  mountTargets: Record<string, TrackedMountTarget>;
+  /** Legacy name for the selected controller ID. */
+  selectedInstrumentId: string | null;
 }
 
 function applyOne(state: StateMap, record: SKRecord): StateMap {
@@ -232,7 +239,7 @@ function latestAfterRecord(
  * records stream in live, so an entity that registers after the initial fetch —
  * e.g. a program brought up seconds after SK restarts, or a controller shut
  * down for maintenance then restored — is recognized the moment its records
- * arrive, no reconnect required. `useEntities`, `useInstruments`, and
+ * arrive, no reconnect required. `useEntities`, `useControllers`, and
  * `getSitePosition` all route through here so they stay in sync.
  */
 export function entityTypeOf(
@@ -261,7 +268,7 @@ export const useSensorKitStore = create<SensorKitStore>()(
       productCatalog: {},
       productHeaders: {},
       latestProduct: null,
-      selectedInstrumentId: null,
+      selectedControllerId: null,
       mountTargets: {},
 
       setConnection: (status, error) =>
@@ -448,13 +455,13 @@ export const useSensorKitStore = create<SensorKitStore>()(
           latestProduct: null,
         }),
 
-      setSelectedInstrumentId: (id) => set({ selectedInstrumentId: id }),
+      setSelectedControllerId: (id) => set({ selectedControllerId: id }),
 
-      setMountTarget: (instrumentId, target) =>
+      setMountTarget: (controllerId, target) =>
         set((s) => {
           const next = { ...s.mountTargets };
-          if (target === null) delete next[instrumentId];
-          else next[instrumentId] = target;
+          if (target === null) delete next[controllerId];
+          else next[controllerId] = target;
           return { mountTargets: next };
         }),
 
@@ -514,10 +521,25 @@ export const useSensorKitStore = create<SensorKitStore>()(
       name: "sensorview.sensorkit",
       version: 1,
       // Only persist user intent — `state` and `entities` must always come live from the webapi.
-      partialize: (s) => ({
+      // The version-1 shape keeps the legacy `selectedInstrumentId` field name;
+      // map it explicitly both ways (null included) rather than renaming on disk.
+      partialize: (s): PersistedSensorKit => ({
         mountTargets: s.mountTargets,
-        selectedInstrumentId: s.selectedInstrumentId,
+        selectedInstrumentId: s.selectedControllerId,
       }),
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<Record<keyof PersistedSensorKit, unknown>>;
+        const mt = p.mountTargets;
+        return {
+          ...current,
+          mountTargets:
+            typeof mt === "object" && mt !== null && !Array.isArray(mt)
+              ? (mt as PersistedSensorKit["mountTargets"])
+              : current.mountTargets,
+          selectedControllerId:
+            typeof p.selectedInstrumentId === "string" ? p.selectedInstrumentId : null,
+        };
+      },
     },
   ),
 );

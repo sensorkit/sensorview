@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   entityTypeOf,
-  isControllerState,
   shallowArrayEqual,
   useSensorKitSlice,
   useSensorKitStore,
   type StateMap,
   type TrackedMountTarget,
 } from "../../stores/sensorkit";
+import {
+  mountCandidatesOf,
+  normalizeCameraParams,
+  progressCameraOf,
+  useControllers,
+  type ControllerRow,
+} from "./entities";
 import {
   isTLE,
   sameSatKey,
@@ -17,7 +23,7 @@ import {
   type CatalogRecord,
   type SatKey,
 } from "../../stores/satellites";
-import type { Capabilities, EntityListing } from "./types";
+import type { EntityListing } from "./types";
 
 /**
  * Activity thresholds. The simulator reports `velocity: 0` even while tracking,
@@ -34,20 +40,89 @@ const MOTION_STALE_MS = 5000; // seen motion within this window = still active
 const EARTH_R_KM = 6371;
 const DEG2RAD = Math.PI / 180;
 
-/**
- * An Instrument is the (controller + its devices) pair the user actually
- * commands. A SensorKit deployment may have multiple.
- */
-export interface Instrument {
-  id: string;
-  online: boolean;
+/** A controller's mount candidates and readiness for direct commands. */
+export interface ControllerMount extends ControllerRow {
+  mountCandidates: string[];
   mount: string | null;
-  camera: string | null;
-  focuser: string | null;
-  rotator: string | null;
-  filter_wheel: string | null;
-  dome: string | null;
-  mirror_cover: string | null;
+  /** Reason the unique mount cannot accept a direct command. */
+  mountBlocker: MountBlocker | null;
+  /** Online controller whose unique mount is leased and ready. */
+  mountUsable: boolean;
+}
+
+/** Reasons a unique mount can't take a direct FollowTarget command. */
+export type MountBlocker = "mount_offline" | MountNotReadyKind;
+
+/**
+ * Live gate for direct mount commands: lease, then readiness. The published
+ * "mount" archetype is trusted for FollowTarget support — SensorKit's
+ * StandardMount requires the command and validates the declared archetype.
+ */
+function mountBlockerOf(
+  mountId: string,
+  mountState: Record<string, unknown> | undefined,
+): MountBlocker | null {
+  if (!mountState || !("EntityLease" in mountState)) return "mount_offline";
+  return mountReadiness(mountId, mountState);
+}
+
+function candidateListsEqual(a: string[][], b: string[][]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (!shallowArrayEqual(a[i]!, b[i]!)) return false;
+  }
+  return true;
+}
+
+/** Subscribe to controller inventory, mount candidates, and mount readiness. */
+export function useControllerMounts(): ControllerMount[] {
+  const controllers = useControllers();
+  const candidates = useSensorKitSlice(
+    (s) => controllers.map((c) => mountCandidatesOf(c.details, s.state)),
+    candidateListsEqual,
+  );
+  const blockers = useSensorKitSlice(
+    (s) =>
+      candidates.map((m) => (m.length === 1 ? mountBlockerOf(m[0]!, s.state[m[0]!]) : null)),
+    shallowArrayEqual,
+  );
+  return useMemo(
+    () =>
+      controllers.map((c, i) => {
+        const mountCandidates = candidates[i] ?? [];
+        const mount = mountCandidates.length === 1 ? mountCandidates[0]! : null;
+        const mountBlocker = mount ? (blockers[i] ?? null) : null;
+        return {
+          ...c,
+          mountCandidates,
+          mount,
+          mountBlocker,
+          mountUsable: c.online && !!mount && mountBlocker === null,
+        };
+      }),
+    [controllers, candidates, blockers],
+  );
+}
+
+/**
+ * The controller SkyView acts on: an explicit selection when it still exists
+ * (with or without a mount), otherwise prefer online with a usable mount,
+ * then online, then any with a mount, then the first.
+ */
+export function resolveActiveController<
+  T extends { id: string; online: boolean; mount: string | null; mountUsable: boolean },
+>(controllers: T[], selectedId: string | null): T | null {
+  if (selectedId) {
+    const found = controllers.find((c) => c.id === selectedId);
+    if (found) return found;
+  }
+  return (
+    controllers.find((c) => c.mountUsable) ??
+    controllers.find((c) => c.online) ??
+    controllers.find((c) => c.mount) ??
+    controllers[0] ??
+    null
+  );
 }
 
 export interface RADec {
@@ -60,19 +135,19 @@ export interface AltAz {
   az: number;
 }
 
-export interface InstrumentPointing {
-  instrumentId: string;
+/**
+ * Coordinates measured by `mountId`, associated with `controllerId` for display.
+ * SkyView emits a pointing when the controller has exactly one mount candidate
+ * and that mount holds a lease.
+ */
+export interface MountPointing {
+  controllerId: string;
   mountId: string;
   radec: RADec | null;
   altaz: AltAz | null;
   targetDistanceArcsec: number | null;
   /** What the mount is commanded to follow — used to anchor the cone's reticle. */
   target: { rangeKm: number; regime: string | undefined } | null;
-}
-
-function pickDevice(caps: Capabilities | undefined, type: string): string | null {
-  if (!caps?.devices) return null;
-  return caps.devices[type] ?? null;
 }
 
 /**
@@ -91,71 +166,6 @@ export function isEntityLive(
 ): boolean {
   const ent = state[entityName];
   return !!ent && "EntityLease" in ent;
-}
-
-function computeInstruments(state: StateMap): Instrument[] {
-  // Enumerate controllers from live `state`, not the `entities` snapshot.
-  // `entities` is only refetched on SSE (re)connect, so a controller that
-  // registers afterward (shut down for maintenance, then brought back up)
-  // wouldn't appear until the app reconnected. Its EntityInfo/EntityLease/
-  // Capabilities records stream in live, so `state` always has the controller
-  // the moment it's back — no reload required.
-  return Object.entries(state)
-    .filter(([, ent]) => isControllerState(ent))
-    .map(([name, ent]) => {
-      const caps = ent["Capabilities"] as Capabilities | undefined;
-      return {
-        id: name,
-        // Trust live EntityLease presence — the same lease gate used
-        // everywhere else (device pills, mount-state classification).
-        online: isEntityLive(state, name),
-        mount: pickDevice(caps, "mount"),
-        camera: pickDevice(caps, "camera"),
-        focuser: pickDevice(caps, "focuser"),
-        rotator: pickDevice(caps, "rotator"),
-        filter_wheel: pickDevice(caps, "filter_wheel"),
-        dome: pickDevice(caps, "dome"),
-        mirror_cover: pickDevice(caps, "mirror_cover"),
-      };
-    })
-    // `state` has no inherent order; sort by id so the dropdown stays stable
-    // across re-renders and record arrivals.
-    .sort((a, b) => a.id.localeCompare(b.id));
-}
-
-function instrumentsEqual(a: Instrument[], b: Instrument[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const x = a[i]!;
-    const y = b[i]!;
-    if (
-      x.id !== y.id ||
-      x.online !== y.online ||
-      x.mount !== y.mount ||
-      x.camera !== y.camera ||
-      x.focuser !== y.focuser ||
-      x.rotator !== y.rotator ||
-      x.filter_wheel !== y.filter_wheel ||
-      x.dome !== y.dome ||
-      x.mirror_cover !== y.mirror_cover
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * Derive Instrument list from the sensorkit store.
- *
- * Deliberately does NOT subscribe to the whole `state` map — that identity
- * changes on every telemetry flush, and this hook sits under every SkyView
- * canvas. Instead the instrument list is computed inside the selector and
- * only a *changed* list (controller added/removed, lease flip, capability
- * change) triggers a re-render — i.e. almost never during steady streaming.
- */
-export function useInstruments(): Instrument[] {
-  return useSensorKitSlice((s) => computeInstruments(s.state), instrumentsEqual);
 }
 
 /**
@@ -182,7 +192,7 @@ function computeEntities(state: StateMap): EntityListing[] {
     out.push({
       entity_type,
       name,
-      // Same lease gate as useInstruments — honest liveness, unlike the
+      // Same lease gate as useControllers — honest liveness, unlike the
       // snapshot's `online` which freezes at reconnect.
       online: isEntityLive(state, name),
       details: info?.details ?? null,
@@ -208,7 +218,7 @@ function entitiesEqual(a: EntityListing[], b: EntityListing[]): boolean {
 /**
  * Live entity listing derived from the firehose — a self-healing replacement
  * for the store's `/entities` snapshot for consumers that only need
- * name/entity_type/online. Slice-cached like useInstruments, so only
+ * name/entity_type/online. Slice-cached like useControllers, so only
  * add/remove/lease-flips trigger a re-render, not every telemetry flush.
  */
 export function useEntities(): EntityListing[] {
@@ -292,6 +302,9 @@ export type MountActivityKind =
   | "mount_disconnected"
   | "mount_disabled"
   | "mount_uninitialized"
+  // More than one controlled device publishes the "mount" archetype, so no
+  // single mount's status or pointing represents this controller.
+  | "mount_ambiguous"
   | "offline";
 
 /** The `mountReadiness` kinds — mount present but not in a state to act. */
@@ -383,7 +396,11 @@ function kindForTaskType(taskType: string): Extract<
 }
 
 export interface MountActivity {
-  instrumentId: string;
+  controllerId: string;
+  /** The controller's unique mount, or null for zero or ambiguous candidates. */
+  mountId: string | null;
+  /** Number of nominal mount candidates the controller publishes. */
+  mountCandidateCount: number;
   kind: MountActivityKind;
   /** Human label describing what the mount is doing (e.g., target name). */
   detail: string | null;
@@ -394,23 +411,43 @@ export interface MountActivity {
    * of a collect, where `kind` reads "slewing" — so consumers can tell a
    * collect is running before the first frame lands. */
   taskType: string | null;
-  /** Frame count total when collecting. */
+  /** Frame count total when collecting a single camera sequence. */
   frameTotal: number | null;
-  /** The camera attached to this controller, for frame-progress derivation. */
+  /**
+   * The live camera whose progress represents the running collect (see
+   * progressCameraOf). Null when there is no single resolved camera.
+   */
   cameraId: string | null;
   /** True when the mount is actively slewing or executing — action buttons should disable. */
   busy: boolean;
 }
 
+/** ControllerState fields read for activity, per the verified wire shape. */
+type ControllerStateLike = {
+  execution_state: {
+    executing: boolean;
+    execution: {
+      task_id?: string;
+      task?: {
+        task_type?: string;
+        target?: SkTarget;
+        camera_params?: unknown;
+      } | null;
+    } | null;
+    context?: { frame_num?: number } | null;
+  };
+};
+
 /**
- * Compute activity per instrument from live mount state. Sources, in priority:
+ * Compute activity per controller from live mount state. Sources, in priority:
  *   1. ControllerState.execution_state  → collecting
  *   2. MountAxisEnabled                  → idle if all axes disabled
  *   3. Position change + target error    → slewing vs tracking vs idle
  *   4. mountTargets (persisted, client)  → human label for what's being followed
+ * Mount state is read only for a controller's unique mount candidate.
  */
 export function useMountActivities(): MountActivity[] {
-  const instruments = useInstruments();
+  const controllers = useControllerMounts();
   const mountTargets = useSensorKitStore((s) => s.mountTargets);
   const tles = useSatelliteStore((s) => s.tles);
 
@@ -427,9 +464,19 @@ export function useMountActivities(): MountActivity[] {
   const activityInputs = useSensorKitSlice(
     (s) => {
       const out: unknown[] = [];
-      for (const inst of instruments) {
-        out.push(s.state[inst.id]?.["ControllerState"]);
-        const m = inst.mount ? s.state[inst.mount] : undefined;
+      for (const c of controllers) {
+        const cs = s.state[c.id]?.["ControllerState"] as ControllerStateLike | undefined;
+        out.push(cs);
+        // The progress camera depends on device metadata and camera leases
+        // outside ControllerState; resolving it here makes a reassignment or
+        // camera lease flip recompute without subscribing to telemetry.
+        const exec = cs?.execution_state;
+        out.push(
+          exec?.executing && exec.execution
+            ? progressCameraOf(c.details, exec.execution.task?.camera_params, s.state)
+            : null,
+        );
+        const m = c.mount ? s.state[c.mount] : undefined;
         out.push(
           m ? 1 : 0,
           m && "EntityLease" in m ? 1 : 0,
@@ -448,10 +495,12 @@ export function useMountActivities(): MountActivity[] {
     shallowArrayEqual,
   );
 
-  // Per-mount motion history: last observed position + timestamp. Refs are safe
-  // to read/write inside useMemo and don't trigger reactivity on their own.
+  // Per-controller motion history for its resolved mount: last observed
+  // position + timestamp. Samples are discarded when the resolved mount
+  // changes, so one mount's position never seeds another's motion delta.
+  // Refs are safe to read/write inside useMemo and don't trigger reactivity.
   const motionRef = useRef<
-    Record<string, { az: number; alt: number; lastMovedAt: number }>
+    Record<string, { mountId: string; az: number; alt: number; lastMovedAt: number }>
   >({});
 
   // Tick every second: rolls the "seen motion within 5s" window over AND
@@ -468,16 +517,23 @@ export function useMountActivities(): MountActivity[] {
     // the 1s tick fires, NOT on every telemetry flush.
     const state = useSensorKitStore.getState().state;
     const now = Date.now();
-    return instruments.map<MountActivity>((inst) => {
+    const motion = motionRef.current;
+    for (const id of Object.keys(motion)) {
+      const c = controllers.find((x) => x.id === id);
+      if (!c || c.mount !== motion[id]!.mountId) delete motion[id];
+    }
+    return controllers.map<MountActivity>((c) => {
       const base = {
-        instrumentId: inst.id,
-        cameraId: inst.camera,
+        controllerId: c.id,
+        mountId: c.mount,
+        mountCandidateCount: c.mountCandidates.length,
+        cameraId: null as string | null,
         taskId: null as string | null,
         taskType: null as string | null,
         frameTotal: null as number | null,
       };
 
-      if (!inst.online) {
+      if (!c.online) {
         return { ...base, kind: "offline", detail: null, busy: false };
       }
 
@@ -487,61 +543,46 @@ export function useMountActivities(): MountActivity[] {
       // `execution_state.execution` is SK's `TaskExecution` envelope: the controller
       // mints `task_id` at the top level and nests the semantic task (carrying
       // `task_type` / `target` / `camera_params`) under `.task`.
-      const ctrlState = state[inst.id]?.["ControllerState"] as
-        | {
-            execution_state: {
-              executing: boolean;
-              execution: {
-                task_id?: string;
-                task?: {
-                  task_type?: string;
-                  target?: SkTarget;
-                  camera_params?: { frame_count?: number };
-                } | null;
-              } | null;
-              context?: { frame_num?: number } | null;
-            };
-          }
-        | undefined;
+      const ctrlState = state[c.id]?.["ControllerState"] as ControllerStateLike | undefined;
       const execution = ctrlState?.execution_state;
       const envelope = execution?.execution ?? null;
       const semantic = envelope?.task ?? null;
+      // `camera_params` is one sequence or a list of concurrent ones. A frame
+      // total (and camera progress) only describes a single sequence.
+      const sequences = normalizeCameraParams(semantic?.camera_params);
+      const frameCount = sequences?.length === 1 ? sequences[0]!.frame_count : undefined;
       const taskInfo =
         execution?.executing && envelope
           ? {
               taskId: envelope.task_id ?? null,
-              frameTotal: semantic?.camera_params?.frame_count ?? null,
+              frameTotal: typeof frameCount === "number" ? frameCount : null,
               taskType: semantic?.task_type ?? "task",
               target: semantic?.target ?? null,
+              cameraId: progressCameraOf(c.details, semantic?.camera_params, state),
             }
           : null;
       const baseWithTask = {
         ...base,
+        cameraId: taskInfo?.cameraId ?? null,
         taskId: taskInfo?.taskId ?? null,
         taskType: taskInfo?.taskType ?? null,
         frameTotal: taskInfo?.frameTotal ?? null,
       };
-
-      // "Collecting" should mean a frame is actually in flight. SK's std
-      // collect loop publishes `frame_num` into execution_state.context
-      // once per frame; until that lands, the mount is just tracking/
-      // slewing/idle and labeling the controller "collecting ?/3" is
-      // misleading. Detect the liminal-pre-first-frame state here so the
-      // task branch can defer to mount-state classification.
-      const ctxFrameNum = execution?.context?.frame_num;
-      const collectFrameKnown =
-        typeof ctxFrameNum === "number" && Number.isFinite(ctxFrameNum);
 
       // Mount state is only meaningful when the mount entity is alive AND in a
       // state where it can actually act. A stale Slewing/Tracking keyword left
       // in KV after the mount died — or left over from before it was
       // disconnected/disabled/de-Init'd — would otherwise poison this
       // controller's pill. Gate on the lease first, then on readiness.
-      const mountLive = !!inst.mount && isEntityLive(state, inst.mount);
-      const liveMountState = mountLive ? state[inst.mount!] : undefined;
-      const readiness = mountReadiness(inst.mount, liveMountState);
+      // Only a unique mount candidate is read; an ambiguous set has no
+      // single mount whose status represents the controller.
+      const ambiguous = c.mountCandidates.length > 1;
+      const mountId = c.mount;
+      const liveMountState =
+        mountId && isEntityLive(state, mountId) ? state[mountId] : undefined;
+      const readiness = mountReadiness(mountId, liveMountState);
 
-      if (readiness || !liveMountState) {
+      if (ambiguous || readiness || !liveMountState) {
         // An in-flight controller task outranks readiness: it's gated on the
         // *controller's* own lease, so it's live evidence rather than retained
         // KV. A running Init task is precisely when the mount is legitimately
@@ -555,8 +596,13 @@ export function useMountActivities(): MountActivity[] {
             busy: true,
           };
         }
-        // `readiness` is null here only when the controller declares no mount.
-        return { ...base, kind: readiness ?? "idle", detail: null, busy: false };
+        // `readiness` is null here only when the controller has no unique mount.
+        return {
+          ...base,
+          kind: ambiguous ? "mount_ambiguous" : (readiness ?? "idle"),
+          detail: null,
+          busy: false,
+        };
       }
       const mountState = liveMountState;
 
@@ -573,23 +619,25 @@ export function useMountActivities(): MountActivity[] {
       const alt = rates?.altitude?.mechanical_position ?? null;
 
       if (az !== null && alt !== null) {
-        const prev = motionRef.current[inst.id];
-        if (prev) {
+        const prev = motion[c.id];
+        if (prev && prev.mountId === mountId) {
           const delta = Math.max(Math.abs(az - prev.az), Math.abs(alt - prev.alt));
           if (delta > MOTION_DETECTION_DELTA_DEG) {
-            motionRef.current[inst.id] = { az, alt, lastMovedAt: now };
+            motion[c.id] = { mountId, az, alt, lastMovedAt: now };
           } else {
-            motionRef.current[inst.id] = { ...prev, az, alt };
+            motion[c.id] = { ...prev, az, alt };
           }
         } else {
-          // Seed on first observation — don't backdate lastMovedAt so a
-          // post-refresh snapshot→live delta doesn't look like a slew.
-          motionRef.current[inst.id] = { az, alt, lastMovedAt: 0 };
+          // Seed on first observation of this mount — don't backdate
+          // lastMovedAt so a post-refresh snapshot→live delta (or a switch
+          // to a different mount) doesn't look like a slew.
+          motion[c.id] = { mountId: mountId!, az, alt, lastMovedAt: 0 };
         }
       }
 
-      const motion = motionRef.current[inst.id];
-      const movedRecently = motion ? now - motion.lastMovedAt < MOTION_STALE_MS : false;
+      const sample = motion[c.id];
+      const movedRecently =
+        sample && sample.mountId === mountId ? now - sample.lastMovedAt < MOTION_STALE_MS : false;
 
       const dist = mountState["MountTargetDistance"] as
         | { axis: { distance_arcseconds: number }[] }
@@ -602,7 +650,7 @@ export function useMountActivities(): MountActivity[] {
       // Otto-driven flows have a target label too) over SV's own
       // mountTargets store, which only gets populated by the manual Track
       // buttons in the SkyView.
-      const tracked = mountTargets[inst.id];
+      const tracked = mountTargets[c.id];
       const targetLabel =
         targetLabelFromTask(taskInfo?.target, tles) ??
         describeTracked(tracked, tles);
@@ -628,7 +676,7 @@ export function useMountActivities(): MountActivity[] {
       const isTracking =
         explicitTracking !== undefined ? explicitTracking : movedRecently;
 
-      // Priority: slewing > collecting > tracking > idle.
+      // Priority: slewing > running task > tracking > idle.
       // Slewing wins over the executing-task signal because std collect
       // tasks slew to target as their first phase; without this ordering
       // the dot would read "collecting" the whole time.
@@ -636,48 +684,25 @@ export function useMountActivities(): MountActivity[] {
         return { ...baseWithTask, kind: "slewing", detail: targetLabel, busy: true };
       }
       if (taskInfo) {
+        // A running collect stays busy while its camera or frame is unresolved.
         const kind = kindForTaskType(taskInfo.taskType);
-        // For collect tasks specifically: defer to mount-state classification
-        // while no frame is in flight (task just started, between frames,
-        // or non-context-publishing SK). Better to read "tracking" / "idle"
-        // than "collecting ?/3" — the latter implies we know less than we do.
-        // Init/shutdown/executing don't carry counters, so they always render
-        // their kind directly.
-        const showAsTask = kind !== "collecting" || collectFrameKnown;
-        if (showAsTask) {
-          // detail carries the target for collecting (so the popup shows
-          // what we're imaging) and the raw task_type for "executing" (so
-          // the unknown-task fallback label has something to display);
-          // init / shutdown have no useful detail.
-          const detail =
-            kind === "collecting"
-              ? targetLabel
-              : kind === "executing"
-                ? taskInfo.taskType
-                : null;
-          return { ...baseWithTask, kind, detail, busy: true };
-        }
-        // else: fall through to tracking / idle. Keep baseWithTask's taskId
-        // and frameTotal so the popup still shows what task is queued.
+        const detail =
+          kind === "collecting"
+            ? targetLabel
+            : kind === "executing"
+              ? taskInfo.taskType
+              : null;
+        return { ...baseWithTask, kind, detail, busy: true };
       }
-      // baseWithTask carries the task id / frame total when a task is
-      // queued but not actively imaging a frame — popup details should
-      // still show "task in flight" info even though the dot reads as
-      // tracking/idle for the moment.
       if (isTracking) {
-        return {
-          ...baseWithTask,
-          kind: "tracking",
-          detail: targetLabel,
-          busy: false,
-        };
+        return { ...base, kind: "tracking", detail: targetLabel, busy: false };
       }
-      return { ...baseWithTask, kind: "idle", detail: null, busy: false };
+      return { ...base, kind: "idle", detail: null, busy: false };
     });
     // `activityInputs` is the reactivity key for the store data read via
     // getState() above; `tick` re-samples the high-churn keywords at 1Hz.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instruments, activityInputs, mountTargets, tles, tick]);
+  }, [controllers, activityInputs, mountTargets, tles, tick]);
 
   // `mountTargets` is client-side intent persisted to localStorage, so a label
   // set by a previous session outlives that session — and outlives the mount
@@ -686,8 +711,11 @@ export function useMountActivities(): MountActivity[] {
   // with nothing on the wire backing it. Joined into a string so the effect
   // keys on content, not on the array identity `useMemo` mints each recompute.
   const staleTargetIds = activities
-    .filter((a) => a.kind === "offline" || isMountNotReady(a.kind))
-    .map((a) => a.instrumentId)
+    // Clear intent for ambiguous mounts even during a controller task.
+    .filter(
+      (a) => a.kind === "offline" || isMountNotReady(a.kind) || a.mountCandidateCount > 1,
+    )
+    .map((a) => a.controllerId)
     .join(" ");
   useEffect(() => {
     if (!staleTargetIds) return;
@@ -799,7 +827,10 @@ function targetLabelFromTask(
 }
 
 /**
- * Mount pointings for every instrument that has a mount and live data.
+ * Mount pointings for every controller with a unique, leased mount.
+ * Controllers with ambiguous mount candidates get no single-mount overlay, and
+ * a mount without an EntityLease is skipped so retained KV pointings never
+ * render as current.
  *
  * Subscribes only to the three pointing keywords per mount (via a flat,
  * shallow-compared slice) — NOT the whole `state` map — so consumers
@@ -807,21 +838,21 @@ function targetLabelFromTask(
  * when a pointing actually changed, at most once per telemetry flush
  * (~10Hz), instead of on every record of every entity.
  */
-export function useMountPointings(): InstrumentPointing[] {
-  const instruments = useInstruments();
+export function useMountPointings(): MountPointing[] {
+  const controllers = useControllerMounts();
   const mountTargets = useSensorKitStore((s) => s.mountTargets);
   const positions = useSatelliteStore((s) => s.positions);
   const tles = useSatelliteStore((s) => s.tles);
 
-  // Flat tuple: 4 slots per mounted instrument, aligned with the walk below.
+  // Flat tuple: 4 slots per uniquely mounted controller, aligned with the walk below.
   const pointingSlices = useSensorKitSlice(
     (s) => {
       const out: unknown[] = [];
-      for (const inst of instruments) {
-        if (!inst.mount) continue;
-        const m = s.state[inst.mount];
+      for (const c of controllers) {
+        if (!c.mount) continue;
+        const m = s.state[c.mount];
         out.push(
-          m ? 1 : 0,
+          m && "EntityLease" in m ? 1 : 0,
           m?.["RADecPointing"],
           m?.["AltAzPointing"],
           m?.["MountTargetDistance"],
@@ -833,11 +864,11 @@ export function useMountPointings(): InstrumentPointing[] {
   );
 
   return useMemo(() => {
-    const out: InstrumentPointing[] = [];
+    const out: MountPointing[] = [];
     let i = 0;
-    for (const inst of instruments) {
-      if (!inst.mount) continue;
-      const mountExists = pointingSlices[i] as number;
+    for (const c of controllers) {
+      if (!c.mount) continue;
+      const mountLive = pointingSlices[i] as number;
       // Axes are nullable on the wire: SensorKit publishes an unknown axis as
       // NaN, which arrives as JSON null. A half-known pointing is not a usable
       // pointing — the reticle math and the readout both need both axes — so a
@@ -852,11 +883,11 @@ export function useMountPointings(): InstrumentPointing[] {
         | { distance_arcseconds: number | null }
         | undefined;
       i += 4;
-      if (!mountExists) continue;
+      if (!mountLive) continue;
 
       // Resolve the commanded target → (range, regime) for the cone reticle.
-      const tracked = mountTargets[inst.id];
-      let target: InstrumentPointing["target"] = null;
+      const tracked = mountTargets[c.id];
+      let target: MountPointing["target"] = null;
       if (tracked?.kind === "satellite") {
         // Element-set-matched: a TLE and a state vector for the same object
         // give different ranges, so the cone must read the one commanded.
@@ -867,8 +898,8 @@ export function useMountPointings(): InstrumentPointing[] {
       }
 
       out.push({
-        instrumentId: inst.id,
-        mountId: inst.mount,
+        controllerId: c.id,
+        mountId: c.mount,
         radec:
           raw?.right_ascension_hours != null && raw.declination_degrees != null
             ? { ra: raw.right_ascension_hours * 15, dec: raw.declination_degrees }
@@ -882,5 +913,5 @@ export function useMountPointings(): InstrumentPointing[] {
       });
     }
     return out;
-  }, [instruments, pointingSlices, mountTargets, positions, tles]);
+  }, [controllers, pointingSlices, mountTargets, positions, tles]);
 }

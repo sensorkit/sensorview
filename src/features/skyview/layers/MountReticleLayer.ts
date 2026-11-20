@@ -1,7 +1,7 @@
 import type { GeoProjection } from "d3-geo";
 import {
   rayEndpoint,
-  type InstrumentPointing,
+  type MountPointing,
 } from "../../../lib/sensorkit-client/instruments";
 import { celestialToScreen, geoToScreen } from "../projection";
 import { makeObserver3D, overheadScale, project3D } from "../projection3d";
@@ -40,7 +40,7 @@ const MIN_RING_PX = 1.5;
 
 /**
  * Palette for distinguishing multiple mounts. Cycles if there are more
- * instruments than colors.
+ * mounts than colors.
  */
 const MOUNT_COLORS = [
   "#4da3ff", // blue
@@ -61,7 +61,7 @@ const MANUAL_COLOR = "#ffffff";
 export function renderMountReticles(
   ctx: CanvasRenderingContext2D,
   projection: GeoProjection,
-  pointings: InstrumentPointing[],
+  pointings: MountPointing[],
   manualTarget: { ra: number; dec: number } | null,
 ): void {
   clearFully(ctx);
@@ -130,7 +130,7 @@ export function renderMountReticlesOverhead(
   height: number,
   projection: GeoProjection,
   observer: ObserverLocation,
-  pointings: InstrumentPointing[],
+  pointings: MountPointing[],
   // View center — the pan/rotation applied by the user. When absent the
   // 3D projection degenerates to an observer-centered view, which is fine
   // for the no-pan default.
@@ -189,7 +189,7 @@ export function renderMountReticlesGroundTrack(
   _height: number,
   projection: GeoProjection,
   observer: ObserverLocation,
-  pointings: InstrumentPointing[],
+  pointings: MountPointing[],
 ): void {
   clearFully(ctx);
 

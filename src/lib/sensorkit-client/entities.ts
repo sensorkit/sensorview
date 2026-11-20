@@ -180,3 +180,76 @@ function controllersEqual(a: ControllerRow[], b: ControllerRow[]): boolean {
 export function useControllers(): ControllerRow[] {
   return useSensorKitSlice((s) => computeControllers(s.state), controllersEqual);
 }
+
+function hasNominalArchetype(
+  state: StateMap,
+  deviceId: string,
+  archetype: string,
+): boolean {
+  return deviceDetailsOf(state[deviceId])?.archetype === archetype;
+}
+
+/** List distinct controlled devices with the published `mount` archetype. */
+export function mountCandidatesOf(
+  details: ControllerDetails | null,
+  state: StateMap,
+): string[] {
+  if (!details) return [];
+  const out: string[] = [];
+  for (const id of new Set(details.controlled_devices)) {
+    if (hasNominalArchetype(state, id, "mount")) out.push(id);
+  }
+  return out;
+}
+
+/** Instrument name and requested frame count from a running collect. */
+export interface CameraSequenceRef {
+  instrument?: string | null;
+  frame_count?: number;
+}
+
+function isSequenceRef(v: unknown): v is CameraSequenceRef {
+  if (!isRecord(v)) return false;
+  const instrument = v["instrument"];
+  return instrument === undefined || instrument === null || typeof instrument === "string";
+}
+
+/** Wrap a single parameter set. Return an empty list for absent data or null for malformed data. */
+export function normalizeCameraParams(raw: unknown): CameraSequenceRef[] | null {
+  if (raw === undefined || raw === null) return [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  return list.every(isSequenceRef) ? list : null;
+}
+
+function uniqueChainCamera(chain: InstrumentInfo, state: StateMap): string | null {
+  const cams = chain.devices.filter((id) => hasNominalArchetype(state, id, "camera"));
+  return cams.length === 1 ? cams[0]! : null;
+}
+
+/** Resolve a camera within the exact named instrument or a controller's sole instrument. */
+function resolveSequenceCamera(
+  details: ControllerDetails | null,
+  instrument: string | null | undefined,
+  state: StateMap,
+): string | null {
+  if (!details) return null;
+  const chain =
+    typeof instrument === "string"
+      ? details.instruments.find((c) => c.name === instrument)
+      : details.instruments.length === 1
+        ? details.instruments[0]
+        : undefined;
+  return chain ? uniqueChainCamera(chain, state) : null;
+}
+
+/** Return the live camera for a collect with one resolvable sequence. */
+export function progressCameraOf(
+  details: ControllerDetails | null,
+  cameraParams: unknown,
+  state: StateMap,
+): string | null {
+  const sequences = normalizeCameraParams(cameraParams);
+  if (!sequences || sequences.length !== 1) return null;
+  const camera = resolveSequenceCamera(details, sequences[0]!.instrument, state);
+  return camera && "EntityLease" in (state[camera] ?? {}) ? camera : null;
+}

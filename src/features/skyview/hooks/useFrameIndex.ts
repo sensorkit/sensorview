@@ -5,37 +5,31 @@ interface CameraTelemetryLike {
 }
 
 interface TaskContextLike {
-  /** 0-indexed frame number, published by SK's collect loop into
-   *  `TaskExecutionState.context`. Authoritative when present. */
+  /** Zero-based frame index from controller execution context, when published. */
   frame_num?: number | null;
 }
 
 /**
- * Return the current 0-indexed frame number within a collect task.
- *
- * Prefers SK's authoritative `frame_num` from `TaskExecutionState.context`
- * (since 2026-05-14). When that's absent (older SK, non-collect tasks,
- * race during startup), falls back to a brittle heuristic that derives
- * the index by counting exposure starts seen in
- * `CameraTelemetry.percent_completed`:
- *   • rising through a low threshold (cold camera → first exposure)
- *   • falling from near-peak (between-frames → next exposure)
- *
- * To avoid a stale pre-task `percent_completed=100` being mistaken for a
- * completed frame (the falling 100→15 on the real first exposure would
- * otherwise double-count), we ignore the very first reading after a task
- * change and only start counting once the value actually *changes*.
- *
- * Resets on task change. Caveat for the fallback path: joining mid-task
- * can't recover past frames, so you may see a lower count than reality
- * until the next edge.
+ * Use a published frame index when available. Otherwise count exposure
+ * starts from camera telemetry. The estimate covers samples received
+ * since the task or camera changed, so joining mid-task can undercount.
+ * Callers supplying a camera ID skip missing samples and require a resolved
+ * camera. Callers omitting it retain the task-based count and 0% default.
  */
 export function useFrameIndex(
   taskId: string | null,
   cameraTel: CameraTelemetryLike | undefined,
   taskContext?: TaskContextLike | null,
+  cameraId?: string | null,
 ): number | null {
-  const [index, setIndex] = useState<number | null>(null);
+  const cameraScoped = cameraId !== undefined;
+  // Reset key: task plus resolved camera.
+  const resetKey = taskId === null ? null : JSON.stringify([taskId, cameraId ?? null]);
+  // The fallback count, tagged with the key it was counted under.
+  const [counted, setCounted] = useState<{ key: string | null; index: number | null }>({
+    key: null,
+    index: null,
+  });
   const prevTaskId = useRef<string | null>(null);
   const prevPct = useRef(-1);
   const sawChange = useRef(false);
@@ -45,15 +39,18 @@ export function useFrameIndex(
   const armed = useRef(true);
 
   useEffect(() => {
-    if (taskId !== prevTaskId.current) {
-      prevTaskId.current = taskId;
+    if (resetKey !== prevTaskId.current) {
+      prevTaskId.current = resetKey;
       prevPct.current = -1;
       sawChange.current = false;
       armed.current = true;
-      setIndex(null);
+      setCounted({ key: resetKey, index: null });
     }
 
-    const pct = cameraTel?.percent_completed ?? 0;
+    const reading = cameraTel?.percent_completed;
+    // Skip missing samples when a caller supplies a camera ID.
+    if (cameraScoped && (reading === null || reading === undefined)) return;
+    const pct = reading ?? 0;
     const prev = prevPct.current;
 
     // First reading of this task — seed and bail; don't count anything yet.
@@ -68,7 +65,7 @@ export function useFrameIndex(
       const risingFromLow = prev < 10 && pct >= 10;
       const fallingFromPeak = prev >= 90 && pct < 30;
       if (risingFromLow || fallingFromPeak) {
-        setIndex((i) => (i === null ? 0 : i + 1));
+        setCounted((c) => ({ key: c.key, index: c.index === null ? 0 : c.index + 1 }));
         armed.current = false;
       }
     }
@@ -78,16 +75,15 @@ export function useFrameIndex(
     if (pct >= 50) armed.current = true;
 
     prevPct.current = pct;
-  }, [taskId, cameraTel?.percent_completed]);
+  }, [resetKey, cameraScoped, cameraTel?.percent_completed]);
 
-  // Authoritative path: SK publishes `frame_num` into the task context once
-  // per frame. When present, return it directly; telemetry-counting is only
-  // the fallback for older SK builds (or for tasks that don't publish
-  // context). Hook calls above always run so React's rules-of-hooks stays
-  // happy across renders that toggle between the two paths.
+  if (cameraScoped && cameraId === null) return null;
+
   const ctxFrame = taskContext?.frame_num;
   if (typeof ctxFrame === "number" && Number.isFinite(ctxFrame)) {
     return ctxFrame;
   }
-  return index;
+  // Hide the previous camera's count while the reset effect is pending.
+  if (cameraScoped && counted.key !== resetKey) return null;
+  return counted.index;
 }

@@ -21,8 +21,10 @@ import {
 import { useObserver, radecToAltAz } from "../hooks/useObserver";
 import { useSolarSystemBodies, type SolarBody } from "../hooks/useSolarSystemBodies";
 import {
-  useInstruments,
+  resolveActiveController,
+  useControllerMounts,
   useMountActivities,
+  type MountBlocker,
 } from "../../../lib/sensorkit-client/instruments";
 import {
   abortControllerTask,
@@ -389,6 +391,13 @@ function BodyDetail({ body, onClose }: { body: SolarBody; onClose: () => void })
   );
 }
 
+const MOUNT_BLOCKER_TEXT: Record<MountBlocker, string> = {
+  mount_offline: "Mount offline",
+  mount_disconnected: "Mount disconnected",
+  mount_disabled: "Mount disabled",
+  mount_uninitialized: "Mount uninitialized",
+};
+
 type ActionStatus =
   | { phase: "idle" }
   | { phase: "pending"; label: string }
@@ -404,27 +413,25 @@ export function ActionButtons({
   target: ActionTarget;
   palette?: ActionPalette;
 }) {
-  const instruments = useInstruments();
+  const controllers = useControllerMounts();
   const activities = useMountActivities();
   const { observer } = useObserver();
-  const selectedInstrumentId = useSensorKitStore((s) => s.selectedInstrumentId);
-  const setSelectedInstrumentId = useSensorKitStore((s) => s.setSelectedInstrumentId);
+  const selectedControllerId = useSensorKitStore((s) => s.selectedControllerId);
+  const setSelectedControllerId = useSensorKitStore((s) => s.setSelectedControllerId);
   const setMountTarget = useSensorKitStore((s) => s.setMountTarget);
 
-  // Resolve the active instrument: explicit selection → first with a mount, online preferred
-  const active = useMemo(() => {
-    if (selectedInstrumentId) {
-      const found = instruments.find((i) => i.id === selectedInstrumentId);
-      if (found) return found;
-    }
-    return (
-      instruments.find((i) => i.online && i.mount) ??
-      instruments.find((i) => i.mount) ??
-      null
-    );
-  }, [instruments, selectedInstrumentId]);
+  const active = useMemo(
+    () => resolveActiveController(controllers, selectedControllerId),
+    [controllers, selectedControllerId],
+  );
+  const activeMount = active?.mount ?? null;
+  const mountCandidateCount = active?.mountCandidates.length ?? 0;
+  // Direct-command gate for the unique mount (lease, readiness), shared with
+  // auto selection via useControllerMounts. The published "mount" archetype
+  // is trusted for FollowTarget support.
+  const mountBlocker = active?.mountBlocker ?? null;
 
-  const activeActivity = active ? activities.find((a) => a.instrumentId === active.id) : null;
+  const activeActivity = active ? activities.find((a) => a.controllerId === active.id) : null;
   const mountBusy = activeActivity?.busy ?? false;
   const mountBusyReason = activeActivity
     ? activeActivity.kind === "collecting"
@@ -468,10 +475,33 @@ export function ActionButtons({
     (target.kind === "horizons" && target.isSun);
   const sunTooltip = sunGuarded ? "Disabled for safety — target is the Sun" : null;
 
-  const hasMount = !!active?.mount;
-  const canSlew = hasMount && !mountBusy && !sunGuarded;
-  const canTrack = hasMount && showTrack && !mountBusy && !sunGuarded;
-  const canCollect = !!active && !mountBusy && !sunGuarded;
+  // Slew/Track command the controller's unique mount directly. Ambiguous
+  // candidates never resolve to one of them, even if only one is online.
+  const mountReason = !active
+    ? null
+    : mountCandidateCount > 1
+      ? `${mountCandidateCount} mount candidates — ambiguous`
+      : !activeMount
+        ? "No mount available"
+        : !active.online
+          ? "Controller offline"
+          : mountBlocker
+            ? MOUNT_BLOCKER_TEXT[mountBlocker]
+            : null;
+  const canCommandMount = !!active && mountReason === null;
+  const canSlew = canCommandMount && !mountBusy && !sunGuarded;
+  const canTrack = canCommandMount && showTrack && !mountBusy && !sunGuarded;
+  // Collect is a controller task, independent of mount resolution. It needs an
+  // online controller advertising the exact task class name (an operation
+  // capability, not proof of a particular controller implementation).
+  const collectReason = !active
+    ? "No controller"
+    : !active.online
+      ? "Controller offline"
+      : !active.details?.supported_tasks.includes("StandardCollectTask")
+        ? "Controller does not advertise StandardCollectTask"
+        : null;
+  const canCollect = collectReason === null && !mountBusy && !sunGuarded;
 
   // A collect on the active controller is in progress — true across the whole
   // task lifecycle (slew-to-target, then frames), so the Collect button can
@@ -481,7 +511,29 @@ export function ActionButtons({
     activeActivity?.taskType === "standard_collect";
 
   const busy = status.phase === "pending";
-  const [confirmAbort, setConfirmAbort] = useState(false);
+
+  // InitTask recovery. This submits a controller lifecycle task, so it's
+  // gated on the controller: online, advertising InitTask, no task running,
+  // and no local action pending.
+  const canInitController =
+    !!active &&
+    active.online &&
+    !!active.details?.supported_tasks.includes("InitTask") &&
+    !!activeActivity &&
+    activeActivity.taskType === null &&
+    !busy;
+  // Offered proactively only for a unique, live mount that is disconnected or
+  // uninitialized — not for ambiguous or absent mounts.
+  const offerInitRecovery =
+    canInitController &&
+    !!activeMount &&
+    (mountBlocker === "mount_disconnected" || mountBlocker === "mount_uninitialized");
+
+  // The collect the Abort dialog was opened for. Pinned at open time because
+  // auto selection can move to another controller while the dialog is up.
+  const [abortTarget, setAbortTarget] = useState<
+    { controllerId: string; taskId: string } | null
+  >(null);
   // Abort gets its own in-flight flag, deliberately NOT `busy`: SK's /execute
   // blocks until the collect finishes, so `busy` stays true for the whole
   // collect — the exact window Abort must stay clickable.
@@ -490,18 +542,28 @@ export function ActionButtons({
   // it by cancelling the blocked call — reads as "aborted", not "failed".
   const abortRequestedRef = useRef(false);
 
-  const onAbort = async () => {
-    if (!active) return;
-    setConfirmAbort(false);
-    // The collect may have finished between opening the dialog and confirming.
-    // With no task in flight there's nothing to abort (SK would just 409), so
-    // skip quietly — the button has already reverted to Collect.
+  const openAbort = () => {
     const taskId = activeActivity?.taskId;
-    if (!taskId) return;
+    if (active && taskId) setAbortTarget({ controllerId: active.id, taskId });
+  };
+
+  const onAbort = async () => {
+    const pinned = abortTarget;
+    setAbortTarget(null);
+    if (!pinned) return;
+    // The pinned collect may have finished between opening the dialog and
+    // confirming. Abort only if it is still the task executing on its own
+    // controller; otherwise skip quietly (SK would just 409).
+    const exec = (
+      useSensorKitStore.getState().state[pinned.controllerId]?.["ControllerState"] as
+        | { execution_state?: { executing?: boolean; execution?: { task_id?: string } | null } }
+        | undefined
+    )?.execution_state;
+    if (!exec?.executing || exec.execution?.task_id !== pinned.taskId) return;
     abortRequestedRef.current = true;
     setAborting(true);
     try {
-      await abortControllerTask(active.id, taskId);
+      await abortControllerTask(pinned.controllerId, pinned.taskId);
     } catch (err) {
       // Abort itself failed — the collect is still running. Clear the flag so
       // its eventual completion isn't mislabeled, and surface the error.
@@ -534,8 +596,10 @@ export function ActionButtons({
     }
   };
 
-  const onInit = () =>
-    active && runAction("Init", () => executeControllerTask(active.id, initTask()));
+  const onInit = () => {
+    if (!active || !canInitController) return;
+    runAction("Init controller", () => executeControllerTask(active.id, initTask()));
+  };
 
   const targetName =
     target.kind === "star" || target.kind === "body" || target.kind === "horizons"
@@ -543,19 +607,19 @@ export function ActionButtons({
       : null;
 
   const onSlew = () => {
-    if (!active?.mount) return;
+    if (!active || !activeMount || !canSlew) return;
     // Set target optimistically so the cone re-anchors the moment the user clicks.
     setMountTarget(active.id, { kind: "icrs", ra: target.ra, dec: target.dec });
     runAction("Slew", () =>
       sendDeviceCommand(
-        active.mount!,
+        activeMount,
         followTarget(icrsTarget(target.ra, target.dec, targetName)),
       ),
     );
   };
 
   const onTrack = () => {
-    if (!active?.mount) return;
+    if (!active || !activeMount || !canTrack) return;
     // For a satellite, track via the TLE (continuous repointing along the
     // satellite's path). For stars / solar-system bodies / anything else,
     // track via ICRS — SK's FollowTarget on an ICRSTarget produces sidereal-
@@ -567,13 +631,13 @@ export function ActionButtons({
         elementSet: satKeyOf(satRecord).kind,
       });
       runAction("Track", () =>
-        sendDeviceCommand(active.mount!, followTarget(orbitalTarget)),
+        sendDeviceCommand(activeMount, followTarget(orbitalTarget)),
       );
     } else {
       setMountTarget(active.id, { kind: "icrs", ra: target.ra, dec: target.dec });
       runAction("Track", () =>
         sendDeviceCommand(
-          active.mount!,
+          activeMount,
           followTarget(icrsTarget(target.ra, target.dec, targetName)),
         ),
       );
@@ -581,14 +645,18 @@ export function ActionButtons({
   };
 
   const onCollect = (preset: CollectPreset) => {
-    if (!active) return;
-    if (satRecord)
-      setMountTarget(active.id, {
-        kind: "satellite",
-        noradId: satRecord.noradId,
-        elementSet: satKeyOf(satRecord).kind,
-      });
-    else setMountTarget(active.id, { kind: "icrs", ra: target.ra, dec: target.dec });
+    if (!active || !canCollect) return;
+    // The target label/cone anchor is per-mount intent; only record it when
+    // the controller has a unique mount for it to describe.
+    if (activeMount) {
+      if (satRecord)
+        setMountTarget(active.id, {
+          kind: "satellite",
+          noradId: satRecord.noradId,
+          elementSet: satKeyOf(satRecord).kind,
+        });
+      else setMountTarget(active.id, { kind: "icrs", ra: target.ra, dec: target.dec });
+    }
     const programName = useBackends.getState().programName.trim() || "sensorview";
     const rawTargetId =
       target.kind === "satellite" ? (satRecord?.noradId ?? "manual")
@@ -685,19 +753,19 @@ export function ActionButtons({
     });
   };
 
-  const noInstrumentsMsg = instruments.length === 0 ? "No SensorKit controllers online" : null;
+  const noControllersMsg = controllers.length === 0 ? "No SensorKit controllers online" : null;
 
   return (
     <div className="space-y-2">
-      {instruments.length > 1 && (
+      {controllers.length > 1 && (
         <label
           className="flex items-center gap-2 text-[10px]"
           style={{ color: palette === "paper" ? "var(--color-paper-dim)" : undefined }}
         >
-          Instrument
+          Controller
           <select
-            value={selectedInstrumentId ?? active?.id ?? ""}
-            onChange={(e) => setSelectedInstrumentId(e.target.value || null)}
+            value={active?.id ?? ""}
+            onChange={(e) => setSelectedControllerId(e.target.value || null)}
             className={
               palette === "paper"
                 ? "flex-1 rounded-sm px-2 py-1 text-xs mono"
@@ -713,11 +781,15 @@ export function ActionButtons({
                 : undefined
             }
           >
-            {instruments.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.id}
-                {i.online ? "" : " (offline)"}
-                {i.mount ? "" : " — no mount"}
+            {controllers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.id}
+                {c.online ? "" : " (offline)"}
+                {c.mountCandidates.length === 0
+                  ? " — no mount"
+                  : c.mountCandidates.length > 1
+                    ? ` — ${c.mountCandidates.length} mounts`
+                    : ""}
               </option>
             ))}
           </select>
@@ -731,9 +803,10 @@ export function ActionButtons({
           disabled={!canSlew || busy}
           tooltip={
             sunTooltip ??
-            noInstrumentsMsg ??
+            noControllersMsg ??
             mountBusyReason ??
-            (!hasMount ? "No mount available" : "Slew to target")
+            mountReason ??
+            "Slew to target"
           }
           onClick={onSlew}
           tone="blue"
@@ -745,9 +818,10 @@ export function ActionButtons({
             disabled={!canTrack || busy}
             tooltip={
               sunTooltip ??
-              noInstrumentsMsg ??
+              noControllersMsg ??
               mountBusyReason ??
-              (!hasMount ? "No mount available" : !satRecord ? "Elements not loaded" : "Track target")
+              mountReason ??
+              (!satRecord ? "Elements not loaded" : "Track target")
             }
             onClick={onTrack}
             tone="blue"
@@ -758,7 +832,7 @@ export function ActionButtons({
             <AbortButton
               palette={palette}
               disabled={aborting}
-              onClick={() => setConfirmAbort(true)}
+              onClick={openAbort}
             />
           ) : (
             <CollectSplitButton
@@ -766,20 +840,35 @@ export function ActionButtons({
               disabled={!canCollect || busy}
               tooltip={
                 sunTooltip ??
-                noInstrumentsMsg ??
+                noControllersMsg ??
                 mountBusyReason ??
-                (!active ? "No controller" : undefined)
+                collectReason ??
+                undefined
               }
               onCollect={onCollect}
             />
           ))}
       </div>
 
-      {confirmAbort && (
+      {abortTarget && (
         <AbortCollectDialog
+          controllerId={abortTarget.controllerId}
+          taskId={abortTarget.taskId}
           onConfirm={onAbort}
-          onCancel={() => setConfirmAbort(false)}
+          onCancel={() => setAbortTarget(null)}
         />
+      )}
+
+      {offerInitRecovery && (
+        <div
+          className="text-[10px] font-mono flex items-center gap-2 flex-wrap"
+          style={{ color: palette === "paper" ? "var(--color-paper-dim)" : undefined }}
+        >
+          <span className={palette === "paper" ? undefined : "text-amber-300"}>
+            {mountReason}
+          </span>
+          <InitControllerButton onClick={onInit} />
+        </div>
       )}
 
       {status.phase !== "idle" && (
@@ -800,15 +889,9 @@ export function ActionButtons({
               <span>
                 {status.label} failed: {truncate(status.message, 60)}
               </span>
-              {/^.*device not connected.*$/i.test(status.message) && active && (
-                <button
-                  onClick={onInit}
-                  disabled={busy}
-                  className="px-2 py-0.5 rounded text-[10px] font-medium border border-blue-500/40 bg-blue-500/20 text-blue-200 hover:bg-blue-500/30 disabled:opacity-50"
-                >
-                  Init mount
-                </button>
-              )}
+              {/^.*device not connected.*$/i.test(status.message) &&
+                canInitController &&
+                !offerInitRecovery && <InitControllerButton onClick={onInit} />}
             </>
           )}
         </div>
@@ -871,6 +954,20 @@ function ActionBtn({
   );
 }
 
+// Submits the controller's InitTask (a lifecycle task), so it names the
+// controller rather than the mount.
+function InitControllerButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title="Submit InitTask to this controller"
+      className="px-2 py-0.5 rounded text-[10px] font-medium border border-blue-500/40 bg-blue-500/20 text-blue-200 hover:bg-blue-500/30 disabled:opacity-50"
+    >
+      Init controller
+    </button>
+  );
+}
+
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1) + "…";
 }
@@ -926,9 +1023,13 @@ function AbortButton({
 // "Are you sure?" gate before aborting an in-progress collect. Standard
 // dark-panel overlay, matching the app's other modals.
 function AbortCollectDialog({
+  controllerId,
+  taskId,
   onConfirm,
   onCancel,
 }: {
+  controllerId: string;
+  taskId: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -942,6 +1043,13 @@ function AbortCollectDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-sm font-semibold text-text-bright">Are you sure?</h2>
+        <p className="text-xs text-text-dim">
+          Abort the collect on controller{" "}
+          <span className="font-mono text-text-bright">{controllerId}</span>
+          <span className="block font-mono text-[10px] truncate" title={taskId}>
+            task {taskId}
+          </span>
+        </p>
         <div className="flex justify-end gap-2 pt-1">
           <button
             type="button"
