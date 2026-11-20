@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useSensorKitStore } from "../../stores/sensorkit";
+import { entityTypeOf, useSensorKitStore } from "../../stores/sensorkit";
+import { deviceDetailsOf } from "../../lib/sensorkit-client/entities";
 import type { EntityListing, EntityType } from "../../lib/sensorkit-client/types";
 import { WeatherCard } from "./WeatherCard";
 
@@ -88,7 +89,7 @@ export function StatusPage() {
             ) : (
               ENTITY_GROUPS.map(({ type, label }) => {
                 const items = entities
-                  .filter((e) => e.entity_type === type)
+                  .filter((e) => (entityTypeOf(state[e.name]) ?? e.entity_type) === type)
                   .sort((a, b) => a.name.localeCompare(b.name));
                 if (items.length === 0) return null;
                 return (
@@ -122,6 +123,8 @@ function EntityRow({
   entityState: Record<string, unknown> | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const liveDeviceDetails = deviceDetailsOf(entityState);
+  const archetype = liveDeviceDetails ? liveDeviceDetails.archetype : entity.archetype;
   const hasDetails = entity.details && Object.keys(entity.details).length > 0;
   const hasState = entityState ? Object.keys(entityState).length > 0 : false;
   const expandable = hasDetails || hasState;
@@ -148,7 +151,7 @@ function EntityRow({
           {entity.name}
         </span>
         <span className="text-text-dim truncate min-w-0 flex-1">
-          {entity.archetype ?? ""}
+          {archetype ?? ""}
         </span>
       </button>
 
