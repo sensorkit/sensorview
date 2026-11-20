@@ -1,7 +1,9 @@
 /** Live entity metadata. Cache parsed details by KV payload identity. */
 import {
+  agentEntityOf,
   entityTypeOf,
   useSensorKitSlice,
+  useSensorKitStore,
   type StateMap,
 } from "../../stores/sensorkit";
 import type {
@@ -9,6 +11,8 @@ import type {
   DeviceDetails,
   EntityType,
   InstrumentInfo,
+  ModeState,
+  ModeStates,
 } from "./types";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -252,4 +256,61 @@ export function progressCameraOf(
   if (!sequences || sequences.length !== 1) return null;
   const camera = resolveSequenceCamera(details, sequences[0]!.instrument, state);
   return camera && "EntityLease" in (state[camera] ?? {}) ? camera : null;
+}
+
+/** Controller ID → that controller's mode states, from the agent's AgentConfig. */
+export type AgentModeStates = ReadonlyMap<string, ModeStates>;
+
+const NO_AGENT_MODES: AgentModeStates = new Map();
+const agentModesCache = new WeakMap<object, AgentModeStates>();
+
+/**
+ * Index one controller's mode list by exact name. An entry without a string
+ * name is skipped; an unknown, missing, or malformed state maps to null, as
+ * does a name repeated with conflicting states.
+ */
+function parseModeStates(modes: unknown[]): ModeStates {
+  const out = new Map<string, ModeState | null>();
+  for (const m of modes) {
+    if (!isRecord(m) || typeof m["name"] !== "string") continue;
+    const name = m["name"];
+    const raw = m["state"];
+    const state = raw === "operate" || raw === "standby" ? raw : null;
+    out.set(name, out.has(name) && out.get(name) !== state ? null : state);
+  }
+  return out;
+}
+
+/** Read `controllers[id].modes`, skipping controllers whose entry is malformed. */
+function parseAgentModeStates(config: Record<string, unknown>): AgentModeStates {
+  const controllers = config["controllers"];
+  if (!isRecord(controllers)) return NO_AGENT_MODES;
+  const out = new Map<string, ModeStates>();
+  for (const [id, cfg] of Object.entries(controllers)) {
+    const modes = isRecord(cfg) ? cfg["modes"] : undefined;
+    if (Array.isArray(modes)) out.set(id, parseModeStates(modes));
+  }
+  return out;
+}
+
+/**
+ * Mode states from the AgentConfig on the entity that supplies AgentState.
+ * Reuse the map while the AgentConfig payload is unchanged. Use a shared empty
+ * map when the config or its controller table is unavailable.
+ */
+export function agentModeStatesOf(state: StateMap): AgentModeStates {
+  const agent = agentEntityOf(state);
+  const config = agent ? state[agent]?.["AgentConfig"] : undefined;
+  if (!isRecord(config)) return NO_AGENT_MODES;
+  let parsed = agentModesCache.get(config);
+  if (!parsed) {
+    parsed = parseAgentModeStates(config);
+    agentModesCache.set(config, parsed);
+  }
+  return parsed;
+}
+
+/** Subscribe to mode states derived from the current AgentConfig payload. */
+export function useAgentModeStates(): AgentModeStates {
+  return useSensorKitStore((s) => agentModeStatesOf(s.state));
 }

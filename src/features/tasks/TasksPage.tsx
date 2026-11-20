@@ -10,15 +10,16 @@ import {
   includeProgramInScheduler,
 } from "../../lib/sensorkit-client/commands";
 import type {
-  AgentCapabilities,
   AgentState,
   EntityListing,
+  ModeStates,
   ScheduleEntry,
 } from "../../lib/sensorkit-client/types";
 import { useEntities } from "../../lib/sensorkit-client/instruments";
 import {
   normalizeCameraParams,
   progressCameraOf,
+  useAgentModeStates,
   useControllers,
   type CameraSequenceRef,
   type ControllerRow,
@@ -106,8 +107,7 @@ export function TasksPage() {
   const programs = entities.filter((e) => e.entity_type === "program");
 
   const agentState = useSensorKitStore((s) => s.getAgentState)() ?? undefined;
-  const agentCapabilities =
-    useSensorKitStore((s) => s.getAgentCapabilities)() ?? null;
+  const agentModes = useAgentModeStates();
 
   // When SensorKit isn't reachable, collapse the page to a single line —
   // matches DevicesPage / StatusPage. SK LIVE pill in the top nav covers
@@ -178,7 +178,7 @@ export function TasksPage() {
                     controller={c}
                     controllerState={controllerState}
                     scheduleWindows={agentState?.scheduler_state.schedule?.[c.id] ?? []}
-                    agentCapabilities={agentCapabilities}
+                    modeStates={agentModes.get(c.id)}
                     cameraId={cameraId}
                     cameraTelemetry={cameraTel}
                   />
@@ -244,14 +244,15 @@ function ControllerCard({
   controller,
   controllerState,
   scheduleWindows,
-  agentCapabilities,
+  modeStates,
   cameraId,
   cameraTelemetry,
 }: {
   controller: ControllerRow;
   controllerState: ControllerState | undefined;
   scheduleWindows: ScheduleEntry[];
-  agentCapabilities: AgentCapabilities | null;
+  /** This controller's mode name → state, from the agent's AgentConfig. */
+  modeStates: ModeStates | undefined;
   /** Live camera whose progress represents the running task, or null. */
   cameraId: string | null;
   cameraTelemetry: CameraTelemetry | undefined;
@@ -341,11 +342,7 @@ function ControllerCard({
         {scheduleWindows.length === 0 ? (
           <div className="text-xs text-text-dim">No scheduled windows.</div>
         ) : (
-          <ScheduleStrip
-            controllerName={controller.id}
-            schedule={scheduleWindows}
-            agentCapabilities={agentCapabilities}
-          />
+          <ScheduleStrip schedule={scheduleWindows} modeStates={modeStates} />
         )}
       </div>
     </div>

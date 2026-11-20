@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
-  AgentCapabilities,
+  ModeState,
+  ModeStates,
   ScheduleEntry,
 } from "../../lib/sensorkit-client/types";
 import { useObserver } from "../skyview/hooks/useObserver";
@@ -26,19 +27,17 @@ const DRAG_THRESHOLD = 5;
  * pill with a stable letter. Preset zoom chips above; "now" cursor anchored
  * at the left edge of the strip.
  *
- * Operate/standby classification is resolved against the agent's published
- * Capabilities keyword. If unavailable (e.g. SK ever drops the deprecated
- * keyword), the mode tint falls back to neutral and only the program layer
- * remains visible.
+ * Operate/standby classification comes from `modeStates`, this controller's
+ * mode definitions in the agent's AgentConfig. A scheduled mode with no usable
+ * definition (or no config at all) draws a neutral tint; the program layer is
+ * unaffected.
  */
 export function ScheduleStrip({
-  controllerName,
   schedule,
-  agentCapabilities,
+  modeStates,
 }: {
-  controllerName: string;
   schedule: ScheduleEntry[];
-  agentCapabilities: AgentCapabilities | null;
+  modeStates: ModeStates | undefined;
 }) {
   const { observer } = useObserver();
   const almanac = useAlmanac(observer);
@@ -88,10 +87,8 @@ export function ScheduleStrip({
   // Stable letter + color per program seen in this controller's schedule.
   const programLegend = useMemo(() => buildLegend(intervals), [intervals]);
 
-  const modeStateOf = (modeName: string): "operate" | "standby" | null => {
-    const modes = agentCapabilities?.controllers[controllerName]?.modes;
-    return modes?.find((m) => m.name === modeName)?.state ?? null;
-  };
+  const modeStateOf = (modeName: string): ModeState | null =>
+    modeStates?.get(modeName) ?? null;
 
   const visible = intervals.filter(
     (iv) => iv.end > view.start && iv.start < view.end,

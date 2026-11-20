@@ -2,7 +2,6 @@ import { useRef } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type {
-  AgentCapabilities,
   AgentState,
   ConnectionStatus,
   EntityListing,
@@ -104,7 +103,6 @@ export interface SensorKitStore {
   getControllerProducts: (controllerId: string) => ProductEntry[];
   getSitePosition: () => SitePosition | null;
   getAgentState: () => AgentState | null;
-  getAgentCapabilities: () => AgentCapabilities | null;
 }
 
 /** Version-1 persisted shape. Field names are on-disk contract. */
@@ -235,8 +233,8 @@ function latestAfterRecord(
  * `/entities` listing omits.
  *
  * Read off live `state` (not the `/entities` snapshot) on purpose: the snapshot
- * is only refetched on SSE (re)connect, but EntityInfo/EntityLease/Capabilities
- * records stream in live, so an entity that registers after the initial fetch —
+ * is only refetched on SSE (re)connect, but EntityInfo/EntityLease records
+ * stream in live, so an entity that registers after the initial fetch —
  * e.g. a program brought up seconds after SK restarts, or a controller shut
  * down for maintenance then restored — is recognized the moment its records
  * arrive, no reconnect required. `useEntities`, `useControllers`, and
@@ -248,6 +246,18 @@ export function entityTypeOf(
   if (!entityState) return undefined;
   const info = entityState["EntityInfo"] as { entity_type?: EntityType } | undefined;
   return info?.entity_type ?? (entityState as { type?: EntityType }).type;
+}
+
+/**
+ * The entity hosting the auto-orchestration agent: the first that supplies
+ * AgentState. Its name is up to the deployer (e.g. "agent", "agent_service"),
+ * so it's found by keyword presence. AgentConfig is read from this same entity.
+ */
+export function agentEntityOf(state: StateMap): string | null {
+  for (const [id, entityState] of Object.entries(state)) {
+    if (entityState["AgentState"]) return id;
+  }
+  return null;
 }
 
 /** True iff this entity's live KV state identifies it as a controller. */
@@ -492,29 +502,10 @@ export const useSensorKitStore = create<SensorKitStore>()(
         return null;
       },
 
-      // Agent state lives on whichever entity hosts the auto-orchestration
-      // agent — name is up to the deployer (e.g. "agent", "agent_service").
-      // Look it up by keyword presence rather than entity name.
       getAgentState: () => {
         const state = get().state;
-        for (const entityState of Object.values(state)) {
-          const a = entityState["AgentState"];
-          if (a) return a as AgentState;
-        }
-        return null;
-      },
-
-      // Agent's published Capabilities (deprecated SK keyword) — same entity
-      // as AgentState. Discriminated from per-entity Capabilities by `type`.
-      getAgentCapabilities: () => {
-        const state = get().state;
-        for (const entityState of Object.values(state)) {
-          const c = entityState["Capabilities"] as
-            | { type?: string }
-            | undefined;
-          if (c?.type === "agent") return c as AgentCapabilities;
-        }
-        return null;
+        const agent = agentEntityOf(state);
+        return agent ? (state[agent]!["AgentState"] as AgentState) : null;
       },
     }),
     {

@@ -188,24 +188,12 @@ export interface AgentState {
   scheduler_state: AgentSchedulerState;
 }
 
-// === Agent Capabilities ===
+// === Agent config ===
 //
-// Published as the `Capabilities` keyword on the agent entity (separate from
-// the per-controller/device Capabilities above — discriminated by `type`).
-// Marked deprecated in SK; we use it because nothing else exposes mode.state
-// today. Replace once Erik exposes `state` directly on ScheduleIntent.
+// AgentConfig publishes `controllers[controllerId].modes` on the same entity as AgentState.
 
-export interface ModeDefinition {
-  name: string;
-  description?: string;
-  state: "operate" | "standby";
-}
+/** Operating state a schedule mode demands of its controller. */
+export type ModeState = "operate" | "standby";
 
-export interface ControllerConfig {
-  modes: ModeDefinition[];
-}
-
-export interface AgentCapabilities {
-  type: "agent";
-  controllers: Record<string, ControllerConfig>;
-}
+/** One controller's mode name → state. `null` marks an unusable definition. */
+export type ModeStates = ReadonlyMap<string, ModeState | null>;

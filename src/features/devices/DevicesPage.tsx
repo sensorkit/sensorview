@@ -1272,6 +1272,7 @@ function WeatherBody({ state }: { state: Record<string, unknown> }) {
 }
 
 function GenericBody({ state }: { state: Record<string, unknown> }) {
+  // Old SensorKit deployments may still have this retired KV key. Hide it from the count.
   const propKeys = Object.keys(state).filter(
     (k) => !["Capabilities", "EntityInfo", "EntityLease", "DeviceState", "Connected"].includes(k),
   );
