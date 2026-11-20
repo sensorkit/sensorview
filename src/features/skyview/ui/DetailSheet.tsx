@@ -677,12 +677,8 @@ export function ActionButtons({
             // it survives from the submission context into the template namespace
             // just like `program_name`.
             target_slug: targetSlug,
-            // SK keyword: key must be the registered name `FileNameTemplate` and
-            // the value an object matching the model (`{ template: "…" }`), or the
-            // webapi won't deserialize it as a keyword. The template references
-            // `{target_slug}` (our sanitized key), NOT SK's `{target_id}`, which
-            // would carry the raw label's spaces/parentheses straight into the path.
-            FileNameTemplate: { template: "{program_name}_{target_slug}_{collect_time}_f{frame_num:03d}.fits" },
+            // Use the sanitized target slug and the frame number from SensorKit's capture context.
+            FileNameTemplate: { template: "{program_name}_{target_slug}_{collect_time}_f{Collect.frame_number:03d}.fits" },
           },
         }),
       );
