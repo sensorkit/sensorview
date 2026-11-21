@@ -222,9 +222,13 @@ export function AgentCard({ state }: { state: AgentState }) {
                 {id}
               </span>
               <span className="text-text-dim">
-                {cs.control_enabled ? "enabled" : "disabled"} · elected{" "}
-                {cs.elected_state ? "yes" : "no"}
-                {cs.demand_override ? ` · override ${cs.demand_override}` : ""}
+                {cs.control_enabled ? "enabled" : "disabled"} ·{" "}
+                {cs.elected_state == null
+                  ? "no elected demand"
+                  : `elected ${cs.elected_state ? "up" : "down"}`}
+                {cs.demand_override == null
+                  ? ""
+                  : ` · override ${cs.demand_override ? "up" : "down"}`}
               </span>
             </div>
           ))}

@@ -162,8 +162,8 @@ export type ConnectionStatus = "idle" | "connecting" | "open" | "error";
 
 export interface AgentControllerInfo {
   control_enabled: boolean;
-  elected_state: boolean;
-  demand_override: string | null;
+  elected_state: boolean | null;
+  demand_override: boolean | null;
 }
 
 export interface AgentOperatingState {
