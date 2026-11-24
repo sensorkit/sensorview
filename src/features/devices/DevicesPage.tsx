@@ -897,22 +897,17 @@ function FocuserBody({
   deviceId: string;
   supportedCommands: string[];
 }) {
-  const pos = state["FocusPosition"] as
-    | { current_position: number; base_position?: number | null }
-    | undefined;
+  const pos = state["FocusPosition"] as { position: number } | undefined;
   return (
     <>
       <Metrics>
-        {pos?.current_position != null && (
-          <Metric label="Position" value={pos.current_position.toFixed(0)} />
-        )}
-        {pos?.base_position != null && (
-          <Metric label="Base" value={pos.base_position.toFixed(0)} />
+        {pos?.position != null && (
+          <Metric label="Position" value={pos.position.toFixed(0)} />
         )}
       </Metrics>
       <PositionChangeControl
         deviceId={deviceId}
-        currentPosition={pos?.current_position}
+        currentPosition={pos?.position}
         supportedCommands={supportedCommands}
         commandId="ChangeFocusPosition"
         buildCommand={changeFocusPosition}
