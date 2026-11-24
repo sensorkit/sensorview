@@ -737,16 +737,14 @@ export function ActionButtons({
             filter_name: preset.filter_name ?? null,
           },
           context: {
+            Program: { id: programSafe },
             program_name: programSafe,
             controller_name: active.id,
             collect_time: collectTime,
-            // Filesystem-safe slug for the filename. A custom key (not a built-in
-            // like `target_id`) so SK's compat layer passes it through verbatim —
-            // it survives from the submission context into the template namespace
-            // just like `program_name`.
+            // Filesystem-safe target name for the capture filename.
             target_slug: targetSlug,
             // Use the sanitized target slug and the frame number from SensorKit's capture context.
-            FileNameTemplate: { template: "{program_name}_{target_slug}_{collect_time}_f{Collect.frame_number:03d}.fits" },
+            FileNameTemplate: { template: "{Program.id}_{target_slug}_{collect_time}_f{Collect.frame_number:03d}.fits" },
           },
         }),
       );

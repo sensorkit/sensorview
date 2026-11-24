@@ -263,10 +263,8 @@ export interface StandardCollectOpts {
    */
   targetId?: string | null;
   /**
-   * Task context (commonly holds `program_name`, which SensorKit's file-path
-   * template resolves into the output directory). Threaded onto the minted
-   * `TaskExecution` via the `TaskSubmission` envelope, where the collect handler
-   * reads it through `task.execution.get_context()`.
+   * Task context, including `Program.id` for output directory templates.
+   * Supplied through `TaskSubmission` and retained on `TaskExecution.context`.
    */
   context?: Record<string, unknown> | null;
 }

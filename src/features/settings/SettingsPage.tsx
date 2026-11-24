@@ -66,9 +66,10 @@ export function SettingsPage() {
           label="Program Name"
           tooltip={
             <>
-              Sent as <code>context.program_name</code> on every Collect task.
+              Sent as <code>context.Program.id</code> on every Collect task,
+              and as <code>context.program_name</code> for existing templates.
               SensorKit substitutes it into the data pipeline's file-path
-              template (<code>{"{program_name}"}</code>). Use any label you want
+              template (<code>{"{Program.id}"}</code>). Use any label you want
               — it doesn't need to match a registered SensorKit program.
             </>
           }

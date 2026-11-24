@@ -14,11 +14,9 @@ interface BackendsState {
   sensorViewApi: string;
   sensorKit: string;
   /**
-   * Observation program label sent in the task `context` on every collect.
-   * SensorKit's file-path template resolves `{program_name}` against the
-   * task context; without it the data pipeline errors with NameError.
-   * Not required to match a registered SensorKit program entity — it's
-   * just a string substituted into the output directory path.
+   * Observation program label sent as `Program.id` in each collect's context.
+   * Also supplied as `program_name` for existing output templates.
+   * The label does not need to match a registered SensorKit program entity.
    */
   programName: string;
   setSensorViewApi: (base: string) => void;
