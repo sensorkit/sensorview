@@ -91,7 +91,7 @@ interface ProgramState {
     contexts: Record<string, unknown>;
   };
   // Optional defensively: a partial/legacy ProgramState snapshot may lack it.
-  tasking_state?: { executing_task: TaskExecution | null };
+  tasking_state?: { execution_state: ControllerState["execution_state"] | null };
 }
 
 // === Page ===
@@ -370,7 +370,8 @@ function ProgramCard({
   const active = programState?.active_state.active ?? false;
   const enabled = programState?.enable_state.enabled ?? false;
   const controller = programState?.enable_state.controller;
-  const taskId = programState?.tasking_state?.executing_task?.task_id ?? null;
+  const executionState = programState?.tasking_state?.execution_state;
+  const taskId = executionState?.executing ? executionState.execution?.task_id ?? null : null;
 
   const [busy, setBusy] = useState<"enable" | "include" | null>(null);
   const [error, setError] = useState<string | null>(null);
