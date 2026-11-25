@@ -33,6 +33,7 @@ import {
   stopDevice,
 } from "../../lib/sensorkit-client/commands";
 import type { DeviceDetails } from "../../lib/sensorkit-client/types";
+import { AutofocusDialog } from "../autofocus/AutofocusDialog";
 
 // Display labels for standard archetypes. A Map accepts any published name.
 const ARCHETYPE_LABELS = new Map<string, string>([
@@ -127,6 +128,7 @@ function useDeviceRows(): DeviceRow[] {
 }
 
 export function DevicesPage() {
+  const [autofocusController, setAutofocusController] = useState<string | null>(null);
   const connection = useSensorKitStore((s) => s.connection);
   const controllers = useControllers();
   const devices = useDeviceRows();
@@ -139,7 +141,7 @@ export function DevicesPage() {
   // there's nothing real to show, and the SK LIVE pill in the top nav
   // already signals the connection state.
   if (connection !== "open") {
-    return (
+    return (<>
       <div className="h-full overflow-y-auto">
         <div className="max-w-6xl mx-auto p-4">
           <div className="text-sm text-text-dim">
@@ -147,10 +149,11 @@ export function DevicesPage() {
           </div>
         </div>
       </div>
-    );
+      {autofocusController && <AutofocusDialog key={autofocusController} controllerId={autofocusController} onClose={() => setAutofocusController(null)} />}
+    </>);
   }
 
-  return (
+  return (<>
     <div className="h-full overflow-y-auto">
       <div className="max-w-6xl mx-auto p-4 space-y-6">
           {/* Controllers and lifecycle actions */}
@@ -161,7 +164,7 @@ export function DevicesPage() {
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {controllers.map((c) => (
-                <ControllerCard key={c.id} controller={c} deviceIndex={deviceIndex} />
+                <ControllerCard key={c.id} controller={c} deviceIndex={deviceIndex} onAutofocus={() => setAutofocusController(c.id)} />
               ))}
             </div>
           </section>
@@ -184,7 +187,8 @@ export function DevicesPage() {
         </section>
       </div>
     </div>
-  );
+    {autofocusController && <AutofocusDialog key={autofocusController} controllerId={autofocusController} onClose={() => setAutofocusController(null)} />}
+  </>);
 }
 
 // === Controller card ===
@@ -211,9 +215,11 @@ type LifecycleTask = (typeof LIFECYCLE_TASKS)[number];
 function ControllerCard({
   controller,
   deviceIndex,
+  onAutofocus,
 }: {
   controller: ControllerRow;
   deviceIndex: Map<string, DeviceRow>;
+  onAutofocus: () => void;
 }) {
   const [status, setStatus] = useState<ActionStatus>({ phase: "idle" });
   const [confirmInitOpen, setConfirmInitOpen] = useState(false);
@@ -229,6 +235,7 @@ function ControllerCard({
     ? LIFECYCLE_TASKS.filter((t) => details.supported_tasks.includes(t.taskClass))
     : [];
   const init = tasks.find((t) => t.taskClass === "InitTask");
+  const supportsAutofocus = details?.supported_tasks.includes("AutoFocus") ?? false;
 
   const run = async (task: LifecycleTask) => {
     const label = task.label;
@@ -279,7 +286,7 @@ function ControllerCard({
 
       {/* Actions — lifecycle tasks the controller publishes in
           supported_tasks. Mount-specific Home/Park live on the mount card. */}
-      {tasks.length > 0 && (
+      {(tasks.length > 0 || supportsAutofocus) && (
         <div className="flex flex-wrap gap-1 pt-1 border-t border-panel-border">
           {tasks.map((t) => (
             <ControlBtn
@@ -290,6 +297,7 @@ function ControllerCard({
               onClick={() => (t === init ? setConfirmInitOpen(true) : run(t))}
             />
           ))}
+          {supportsAutofocus && <ControlBtn label="AutoFocus" tooltip="Configure or inspect an instrument's focus sweep" disabled={false} onClick={onAutofocus} />}
         </div>
       )}
 
