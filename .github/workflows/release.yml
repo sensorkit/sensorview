@@ -43,6 +43,19 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
 
+      - name: Check tag matches package.json
+        # package.json is the source of truth for the version (bump it with
+        # `npm version`, which commits and tags together). Refuse to build a
+        # release whose tag disagrees with the version that would ship.
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          pkg_version=$(node -p "require('./package.json').version")
+          if [ "v$pkg_version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $pkg_version"
+            exit 1
+          fi
+
       - name: Install Linux system deps for electron-builder
         if: matrix.platform == 'ubuntu-22.04'
         run: |
