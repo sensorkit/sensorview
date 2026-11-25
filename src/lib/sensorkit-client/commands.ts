@@ -417,9 +417,7 @@ export const recoverTask = () => lifecycleTask("recover");
 
 // === Entity requests ===
 
-// Invoke a named request handler on any entity (SK's untyped counterpart to a
-// device command). The entity defines what `name` and `body` mean — e.g. the
-// autofocus analyzer's "run_vcurve" and "set_enabled".
+// Invoke a simple named request handler. The entity defines its message and response.
 export function entityRequest(
   entityId: string,
   name: string,
@@ -431,10 +429,7 @@ export function entityRequest(
   );
 }
 
-// Stop a program's tasking and abort its in-flight task. Queued-but-unstarted
-// work is not drained: SK has no endpoint for that, and the autofocus queue
-// prunes its own steps once their end_time passes.
-// ponytail: relies on step expiry; add a real drain if SK grows a cancel request.
+// Stop a program's tasking and abort its in-flight task.
 export function abortProgramTasking(programId: string): Promise<unknown> {
   return postJSON(skUrl(`/program/${encodeURIComponent(programId)}/abort`), {});
 }

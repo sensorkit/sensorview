@@ -2,10 +2,8 @@ import { useEffect, useState } from "react";
 import { useSensorKitStore } from "../../stores/sensorkit";
 import { useFrameIndex } from "../skyview/hooks/useFrameIndex";
 import {
-  abortProgramTasking,
   disableProgram,
   enableProgram,
-  entityRequest,
   excludeProgramFromScheduler,
   includeProgramInScheduler,
 } from "../../lib/sensorkit-client/commands";
@@ -25,9 +23,6 @@ import {
   type ControllerRow,
 } from "../../lib/sensorkit-client/entities";
 import { ScheduleStrip } from "./ScheduleStrip";
-import { VCurvePlot } from "./VCurvePlot";
-import { findAutofocusEntity, useVCurveData, type VCurveData } from "./vcurveData";
-import { Toggle } from "../settings/Toggle";
 
 // === Controller / Program shapes ===
 
@@ -141,12 +136,6 @@ export function TasksPage() {
                   programState={state[p.name]?.["ProgramState"] as ProgramState | undefined}
                   excluded={agentState?.scheduler_state.excluded_programs.includes(p.name) ?? false}
                   controllers={controllers}
-                  autofocusEntity={findAutofocusEntity(
-                    state,
-                    p.name,
-                    (state[p.name]?.["ProgramState"] as ProgramState | undefined)
-                      ?.enable_state.controller,
-                  )}
                 />
               ))}
             </div>
@@ -358,14 +347,11 @@ function ProgramCard({
   programState,
   excluded,
   controllers,
-  autofocusEntity,
 }: {
   entity: EntityListing;
   programState: ProgramState | undefined;
   excluded: boolean;
   controllers: ControllerRow[];
-  /** Analyzer entity behind this program, or null when it isn't an autofocus program. */
-  autofocusEntity: string | null;
 }) {
   const active = programState?.active_state.active ?? false;
   const enabled = programState?.enable_state.enabled ?? false;
@@ -375,8 +361,6 @@ function ProgramCard({
 
   const [busy, setBusy] = useState<"enable" | "include" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showVCurve, setShowVCurve] = useState(false);
-  const vcurve = useVCurveData(autofocusEntity);
 
   // For first-time enable, fall back to the only controller if there's
   // exactly one. Otherwise leave the choice to the server (which 422s if
@@ -410,7 +394,7 @@ function ProgramCard({
   };
 
   return (
-    <div className="@container bg-panel-bg/60 border border-panel-border rounded-lg p-3 space-y-2">
+    <div className="bg-panel-bg/60 border border-panel-border rounded-lg p-3 space-y-2">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm text-text-bright font-semibold truncate">{entity.name}</div>
@@ -457,230 +441,6 @@ function ProgramCard({
         )}
       </div>
 
-      {vcurve && autofocusEntity && (
-        <VCurveControls
-          data={vcurve}
-          autofocusEntity={autofocusEntity}
-          programName={entity.name}
-          show={showVCurve}
-          onShowChange={setShowVCurve}
-        />
-      )}
-    </div>
-  );
-}
-
-/**
- * The V-curve control cluster on the program card: two switches (show the
- * plot, arm the analyzer's passive corrections) and a RUN/ABORT button for a
- * manual sweep.
- */
-function VCurveControls({
-  data,
-  autofocusEntity,
-  programName,
-  show,
-  onShowChange,
-}: {
-  data: VCurveData;
-  autofocusEntity: string;
-  programName: string;
-  show: boolean;
-  onShowChange: (v: boolean) => void;
-}) {
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Session of the sweep already published when we launched. The sweep is done
-  // once the analyzer publishes a different one — SK has no "sweep in progress"
-  // keyword, and this needs no polling.
-  const [launchedAt, setLaunchedAt] = useState<string | null>(null);
-  const running = launchedAt !== null && data.session === launchedAt;
-
-  const act = async (fn: () => Promise<unknown>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await fn();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setLaunchedAt(null);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onRun = () => {
-    setConfirming(false);
-    // `?? ""` so a first-ever sweep (no prior result) still reads as running.
-    setLaunchedAt(data.session ?? "");
-    void act(() => entityRequest(autofocusEntity, "run_vcurve", {}));
-  };
-
-  const onAbort = () =>
-    void act(async () => {
-      await abortProgramTasking(programName);
-      setLaunchedAt(null);
-    });
-
-  return (
-    <div className="space-y-2">
-      <div className="space-y-1.5">
-        <Toggle
-          size="sm"
-          checked={show}
-          onChange={onShowChange}
-          label={<span className="uppercase tracking-wide text-xs text-text-dim">Show V-Curve</span>}
-          title="Show the most recent V-curve sweep"
-        />
-        <Toggle
-          size="sm"
-          checked={data.correctionEnabled}
-          disabled={busy}
-          onChange={(enabled) =>
-            void act(() => entityRequest(autofocusEntity, "set_enabled", { enabled }))
-          }
-          label={
-            <span className="uppercase tracking-wide text-xs text-text-dim">
-              Apply Passive Correction
-            </span>
-          }
-          title="When on, the analyzer nudges focus between sweeps from each frame's FWHM"
-        />
-      </div>
-
-      <button
-        type="button"
-        disabled={busy}
-        onClick={running ? onAbort : () => setConfirming(true)}
-        title={running ? "Abort the sweep in progress" : "Queue an autofocus V-curve sweep"}
-        className={`px-2 py-0.5 pointer-coarse:px-3 pointer-coarse:py-1.5 text-[10px] uppercase tracking-wide rounded border transition-colors ${
-          running
-            ? "border-red-500/40 bg-red-500/15 text-red-300 hover:bg-red-500/25"
-            : "border-panel-border bg-white/5 text-text-dim hover:bg-white/10 hover:text-text-bright"
-        } ${busy ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-      >
-        {running ? "Abort" : "Run"}
-      </button>
-
-      {error && <div className="text-[10px] text-red-300">{error}</div>}
-
-      {confirming && (
-        <ConfirmDialog
-          message="Queue an autofocus V-curve sweep? This slews the mount and steps the focuser."
-          onNo={() => setConfirming(false)}
-          onYes={onRun}
-        />
-      )}
-
-      {show && <VCurvePanel data={data} />}
-    </div>
-  );
-}
-
-function ConfirmDialog({
-  message,
-  onNo,
-  onYes,
-}: {
-  message: string;
-  onNo: () => void;
-  onYes: () => void;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={onNo}
-    >
-      <div
-        className="bg-panel-bg border border-panel-border rounded-lg p-5 w-[360px] max-w-[90vw] space-y-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="text-sm text-text-bright">Are you sure?</div>
-        <div className="text-xs text-text-dim">{message}</div>
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onNo}
-            className="px-3 py-1 text-[11px] uppercase tracking-wide rounded border border-panel-border bg-white/5 text-text-dim hover:bg-white/10 hover:text-text-bright cursor-pointer"
-          >
-            No
-          </button>
-          <button
-            type="button"
-            autoFocus
-            onClick={onYes}
-            className="px-3 py-1 text-[11px] uppercase tracking-wide rounded border border-orange-300/60 bg-orange-300/15 text-orange-200 hover:bg-orange-300/25 cursor-pointer"
-          >
-            Yes
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The expanded V-curve view: sweep facts on the left, plot on the right.
- * Stacks on narrow cards — two program cards already share a row at md, so the
- * side-by-side split only opens up once the card itself is wide.
- */
-function VCurvePanel({ data }: { data: VCurveData }) {
-  const now = useNow();
-  const points = data.samples;
-  const age =
-    data.timestamp !== null
-      ? humanDelta(Math.max(0, now.getTime() - data.timestamp.getTime()))
-      : null;
-
-  // The analyzer has never published a sweep (or its keywords haven't landed).
-  if (!data.fit && points.length === 0) {
-    return (
-      <div className="rounded border border-panel-border bg-black/30 p-2 text-[11px] text-text-dim">
-        No V-curve yet — nothing published by the autofocus analyzer.
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded border border-panel-border bg-black/30 p-2">
-      <div className="flex flex-col @[440px]:flex-row gap-3">
-        <dl className="text-[11px] font-mono space-y-0.5 shrink-0 @[440px]:w-36">
-          {age && <VCurveFact label="Age" value={age} />}
-          <VCurveFact label="Filter" value={data.filter} />
-          {data.binning != null && <VCurveFact label="Binning" value={`${data.binning}`} />}
-          {data.stepSize != null && (
-            <VCurveFact label="Step Size" value={`${data.stepSize}`} />
-          )}
-          {data.numSteps != null && (
-            <VCurveFact label="# of Steps" value={`${data.numSteps}`} />
-          )}
-          {data.bestPosition != null && (
-            <VCurveFact label="Best Focus" value={data.bestPosition.toFixed(0)} />
-          )}
-          {data.bestFwhmArcsec != null && (
-            <VCurveFact label="Best FWHM" value={`${data.bestFwhmArcsec.toFixed(2)}"`} />
-          )}
-        </dl>
-
-        <div className="min-w-0 flex-1">
-          <VCurvePlot
-            points={points}
-            fit={data.fit}
-            bestPosition={data.bestPosition}
-            span={data.span}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function VCurveFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex gap-1.5 min-w-0">
-      <dt className="text-text-dim shrink-0">{label}</dt>
-      <dd className="text-text-bright truncate">= {value}</dd>
     </div>
   );
 }
