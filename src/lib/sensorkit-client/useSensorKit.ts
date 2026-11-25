@@ -4,6 +4,7 @@ import { useBackends } from "../../stores/backends";
 import { fetchEntities, fetchSnapshot } from "./http";
 import { openSensorKitStream } from "./stream";
 import type { SKRecord } from "./types";
+import { useAutofocusStore } from "../../stores/autofocus";
 
 /**
  * Coalescing window for firehose records. During an active collect all three
@@ -43,7 +44,9 @@ export function useSensorKit() {
     const flush = () => {
       flushTimer = null;
       if (cancelled || buffer.length === 0) return;
-      applyRecords(buffer.splice(0, buffer.length));
+      const records = buffer.splice(0, buffer.length);
+      applyRecords(records);
+      useAutofocusStore.getState().ingest(records, useSensorKitStore.getState().state);
     };
 
     const refetchBootstrap = async () => {
@@ -60,6 +63,7 @@ export function useSensorKit() {
         // fetch was in flight flush within FLUSH_MS after and win, so the
         // newest data still lands last.
         applyRecords(snapshot);
+        useAutofocusStore.getState().ingest(snapshot, useSensorKitStore.getState().state);
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
@@ -97,6 +101,7 @@ export function useSensorKit() {
       if (flushTimer !== null) window.clearTimeout(flushTimer);
       handle.close();
       resetState();
+      useAutofocusStore.getState().reset();
       setConnection("idle");
     };
   }, [sensorKitBase, setConnection, setEntities, applyRecords, resetState]);

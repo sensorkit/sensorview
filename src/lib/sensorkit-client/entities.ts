@@ -141,6 +141,11 @@ const parsedControllerOf = cachedParser<ParsedController>("controller", (raw) =>
   return details ? { details, devices: inventoryOf(details) } : null;
 });
 
+/** Read validated controller details without subscribing to the store. */
+export function controllerDetailsOf(entityState: Record<string, unknown> | undefined): ControllerDetails | null {
+  return parsedControllerOf(entityState)?.details ?? null;
+}
+
 export interface ControllerRow {
   id: string;
   /** Holds an EntityLease right now. */
