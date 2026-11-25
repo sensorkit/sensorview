@@ -81,10 +81,20 @@ jobs:
         run: uv sync --dev
 
       - name: Build sidecar
+        if: runner.os != 'Windows'
         shell: bash
         env:
           TARGET: ${{ matrix.sidecar_target }}
         run: bash scripts/build-sidecar.sh
+
+      - name: Build sidecar (Windows)
+        # build-sidecar.sh's curl download of the MediaMTX archive fails on
+        # Windows with curl error 23. The PowerShell script builds the same
+        # sidecar and fetches MediaMTX with Invoke-WebRequest instead (see
+        # its comments and BUILD.md).
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-sidecar.ps1
 
       - name: Build Electron app
         env:
